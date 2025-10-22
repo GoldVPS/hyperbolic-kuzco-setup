@@ -1,0 +1,12 @@
+version: "3.8"
+services:
+  kuzco-main:
+    build: .
+    container_name: kuzco-main
+    network_mode: "host"
+    restart: always
+    environment:
+      NODE_ENV: "production"
+      CODE: "YOUR_WORKER_CODE"
+      WORKER_NAME: "YOUR_WORKER_NAME"
+      OLLAMA_HOST: "http://localhost:11434"
