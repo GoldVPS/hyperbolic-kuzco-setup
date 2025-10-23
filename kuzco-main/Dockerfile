@@ -14,4 +14,9 @@ COPY ./execute.sh /app/execute.sh
 RUN chmod +x /app/execute.sh
 RUN chmod +x /usr/local/bin/inference-runtime
 
+# Create necessary directories for fake GPU
+RUN mkdir -p /proc/driver/nvidia/gpus && \
+    mkdir -p /dev/nvidia && \
+    mkdir -p /usr/local/cuda/bin
+
 CMD ["/app/execute.sh"]
