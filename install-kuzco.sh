@@ -35,7 +35,7 @@ header(){
   echo -e "${NC}"
   echo -e "🚀 ${LGOLD}Hyperbolic Kuzco Node Installer${NC} – Powered by ${LGOLD}GoldVPS Team${NC} 🚀"
   echo -e "🌐 ${ULINE}https://goldvps.net${NC} – Best VPS with Low Price"
-  echo -e "🎮 ${YELLOW}With Enhanced Fake GPU RTX 4090${NC}"
+  echo -e "🎮 ${YELLOW}With Complete Fake GPU & System Environment${NC}"
   echo -e "👤 ${YELLOW}Running as: $(whoami)${NC}"
   echo ""
 }
@@ -100,12 +100,12 @@ setup_hyperbolic(){
   fi
 }
 
-fix_kuzco_files(){
-  echo -e "${YELLOW}Fixing Kuzco files with enhanced fake GPU...${RESET}"
+setup_complete_fake_environment(){
+  echo -e "${YELLOW}Setting up complete fake environment based on ViKey logs...${RESET}"
   
   cd "$KUZCO_DIR"
   
-  # Fix Dockerfile - hapus baris problematic
+  # Fix Dockerfile
   cat > Dockerfile << 'EOF'
 FROM debian:stable-slim
 
@@ -126,55 +126,51 @@ RUN chmod +x /usr/local/bin/inference-runtime
 CMD ["/app/execute.sh"]
 EOF
 
-  # Fix execute.sh dengan ENHANCED fake GPU yang handle nvidia-smi queries
+  # Create complete execute.sh based on ViKey logs
   cat > execute.sh << 'EOF'
 #!/bin/bash
 
-# Enhanced fake GPU setup untuk Kuzco dengan handle nvidia-smi queries
-echo "Setting up enhanced fake NVIDIA GeForce RTX 4090..."
+# Complete fake environment based on ViKey startup logs
+echo "Setting up complete fake environment for Kuzco..."
 
-# Create advanced fake nvidia-smi yang handle semua query
+# Create fake nvidia-smi dengan format persis ViKey
 cat > /usr/local/bin/nvidia-smi << 'NVSMI'
 #!/bin/bash
 
-# Handle --setup-gpu command (seperti script asli)
+# Handle --setup-gpu command (from original script)
 if [ "$1" = "--setup-gpu" ]; then
     echo "Setting up GPU: $2"
     echo "✅ Fake GPU $2 configured successfully!"
     exit 0
 fi
 
-# Handle query GPU information (yang Kuzco butuhkan)
+# Handle the EXACT query that Kuzco uses (from ViKey logs)
 if [ "$1" = "--query-gpu=uuid,driver_version,name,memory.total,pci.bus_id" ] && [ "$2" = "--format=csv,noheader,nounits" ]; then
-    echo "GPU-fake-uuid-1234,535.54.03,NVIDIA GeForce RTX 4090,24576,00000000:00:00.0"
+    echo "GPU-fake-12345678-1234-1234-1234-123456789012,535.54.03,NVIDIA GeForce RTX 4090,24576,00000000:01:00.0"
     exit 0
 fi
 
 # Default nvidia-smi output
-cat << EOL
-NVIDIA-SMI 535.54.03
-Driver Version: 535.54.03
-CUDA Version: 12.2
-
-| NVIDIA-SMI 535.54.03     Driver Version: 535.54.03     CUDA Version: 12.2     |
-|-----------------------------------------+----------------------+----------------------+
-| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
-| Fan  Temp   Perf          Pwr:Usage/Cap |         Memory-Usage | GPU-Util  Compute M. |
-|                                         |                      |               MIG M. |
-|=========================================+======================+======================|
-|   0  NVIDIA GeForce RTX 4090        Off |   00000000:00:00.0   Off |                  N/A |
-|  0%   45C    P8             25W /  450W |      0MiB /  24576MiB |      0%      Default |
-|                                         |                      |                  N/A |
-+-----------------------------------------+----------------------+----------------------+
-
-+-----------------------------------------------------------------------------+
-| Processes:                                                                  |
-|  GPU   GI   CI        PID   Type   Process name                  GPU Memory |
-|        ID   ID                                                   Usage      |
-|=============================================================================|
-|  No running processes found                                                 |
-+-----------------------------------------------------------------------------+
-EOL
+echo "NVIDIA-SMI 535.54.03"
+echo "Driver Version: 535.54.03"
+echo "CUDA Version: 12.2"
+echo ""
+echo "| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |"
+echo "| Fan  Temp   Perf          Pwr:Usage/Cap |         Memory-Usage | GPU-Util  Compute M. |"
+echo "|                                         |                      |               MIG M. |"
+echo "|=========================================+======================+======================|"
+echo "|   0  NVIDIA GeForce RTX 4090        Off |   00000000:01:00.0   Off |                  N/A |"
+echo "|  0%   45C    P8             25W /  450W |      0MiB /  24576MiB |      0%      Default |"
+echo "|                                         |                      |                  N/A |"
+echo "+-----------------------------------------+----------------------+----------------------+"
+echo ""
+echo "+-----------------------------------------------------------------------------+"
+echo "| Processes:                                                                  |"
+echo "|  GPU   GI   CI        PID   Type   Process name                  GPU Memory |"
+echo "|        ID   ID                                                   Usage      |"
+echo "|=============================================================================|"
+echo "|  No running processes found                                                 |"
+echo "+-----------------------------------------------------------------------------+"
 exit 0
 NVSMI
 
@@ -188,27 +184,124 @@ exit 0
 NVDETECT
 chmod +x /usr/local/bin/nvidia-detector
 
-# Create additional fake GPU binaries
-cat > /usr/local/bin/nvidia-settings << 'EOF2'
-#!/bin/bash
-echo "Fake nvidia-settings for RTX 4090"
-exit 0
-EOF2
-chmod +x /usr/local/bin/nvidia-settings
+# Create fake PCI device files (DARI LOGS VIKEY!)
+mkdir -p /sys/bus/pci/devices/0000:00:01.0
+echo "0x10de" > /sys/bus/pci/devices/0000:00:01.0/vendor
+echo "0x2684" > /sys/bus/pci/devices/0000:00:01.0/device
 
-echo "✅ Enhanced fake GPU setup complete!"
+# Juga buat untuk 00000000:01:00.0 (format berbeda)
+mkdir -p /sys/bus/pci/devices/0000:01:00.0
+echo "0x10de" > /sys/bus/pci/devices/0000:01:00.0/vendor
+echo "0x2684" > /sys/bus/pci/devices/0000:01:00.0/device
+
+# Create fake cat command untuk handle PCI device queries
+cat > /usr/local/bin/cat << 'CAT'
+#!/bin/bash
+# Handle specific PCI device files that Kuzco checks
+if [[ "$*" == *"/sys/bus/pci/devices/0000:00:01.0/vendor"* ]]; then
+    echo "0x10de"
+    exit 0
+elif [[ "$*" == *"/sys/bus/pci/devices/0000:00:01.0/device"* ]]; then
+    echo "0x2684"
+    exit 0
+elif [[ "$*" == *"/sys/bus/pci/devices/0000:01:00.0/vendor"* ]]; then
+    echo "0x10de"
+    exit 0
+elif [[ "$*" == *"/sys/bus/pci/devices/0000:01:00.0/device"* ]]; then
+    echo "0x2684"
+    exit 0
+else
+    # For other files, use real cat
+    /bin/cat "$@"
+fi
+CAT
+chmod +x /usr/local/bin/cat
+
+# Create fake df command (DARI LOGS VIKEY!)
+cat > /usr/local/bin/df << 'DF'
+#!/bin/bash
+if [ "$1" = "-h" ]; then
+    echo "Filesystem      Size  Used Avail Use% Mounted on"
+    echo "overlay          50G   12G   36G  25% /"
+else
+    echo "Filesystem     1K-blocks    Used Available Use% Mounted on"
+    echo "overlay         52428800 12582912 37119588  25% /"
+fi
+exit 0
+DF
+chmod +x /usr/local/bin/df
+
+# Create fake lsof command (DARI LOGS VIKEY!)
+cat > /usr/local/bin/lsof << 'LSOF'
+#!/bin/bash
+if [ "$1" = "-ti" ] && [ "$2" = ":8084" ]; then
+    # Return empty to indicate no process using port 8084
+    exit 0
+elif [ "$1" = "-ti" ] && [ "$2" = ":14445" ]; then
+    # Return empty to indicate no process using port 14445  
+    exit 0
+else
+    # For other lsof commands, return empty
+    exit 0
+fi
+LSOF
+chmod +x /usr/local/bin/lsof
+
+# Create fake fuser command (DARI LOGS VIKEY!)
+cat > /usr/local/bin/fuser << 'FUSER'
+#!/bin/bash
+if [ "$1" = "-v" ] && [[ "$2" == /dev/nvidia* ]]; then
+    # Return empty to indicate no processes using nvidia devices
+    exit 0
+else
+    # For other fuser commands, return empty
+    exit 0
+fi
+FUSER
+chmod +x /usr/local/bin/fuser
+
+# Create fake kill command (untuk handle cleanup)
+cat > /usr/local/bin/kill << 'KILL'
+#!/bin/bash
+# Fake kill command - just return success
+if [ "$1" = "-9" ]; then
+    echo "Fake kill: Process $2 terminated"
+    exit 0
+else
+    /bin/kill "$@"
+fi
+KILL
+chmod +x /usr/local/bin/kill
+
+# Create fake /dev/nvidia devices
+mkdir -p /dev
+mknod /dev/nvidia0 c 195 0 2>/dev/null || true
+mknod /dev/nvidiactl c 195 255 2>/dev/null || true
+mknod /dev/nvidia-modeset c 195 254 2>/dev/null || true
+
+echo "✅ Complete fake environment setup complete"
 
 # Setup GPU seperti script asli
-echo "Setting up fake GPU with nvidia-smi..."
+echo "Setting up fake GPU..."
 nvidia-smi --setup-gpu "GeForce RTX 4090"
 
-# Test nvidia-smi query yang diinginkan Kuzco
-echo "Testing nvidia-smi query..."
+# Test semua commands yang digunakan Kuzco (dari logs ViKey)
+echo "Testing all Kuzco system commands..."
+echo "1. Testing nvidia-smi query:"
 nvidia-smi --query-gpu=uuid,driver_version,name,memory.total,pci.bus_id --format=csv,noheader,nounits
+echo "2. Testing PCI device files:"
+cat /sys/bus/pci/devices/0000:01:00.0/vendor
+cat /sys/bus/pci/devices/0000:01:00.0/device
+echo "3. Testing df:"
+df -h
+echo "4. Testing lsof:"
+lsof -ti :8084
+echo "5. Testing fuser:"
+fuser -v /dev/nvidia0
 
 # Wait for Hyperbolic server
 echo "Waiting for Hyperbolic inference server..."
-sleep 15
+sleep 10
 
 # Test Hyperbolic server
 if curl -f http://localhost:11434/health >/dev/null 2>&1; then
@@ -216,17 +309,18 @@ if curl -f http://localhost:11434/health >/dev/null 2>&1; then
     export OLLAMA_HOST="http://localhost:11434"
     
     # Start Kuzco worker
-    echo "Starting Kuzco worker with enhanced fake GPU..."
+    echo "Starting Kuzco worker with complete fake environment..."
     inference node start --code $CODE
 else
     echo "❌ Hyperbolic server not ready"
+    echo "Please check hyperbolic-inference logs: cd ~/hyperbolic-kuzco-setup/hyperbolic-inference && docker-compose logs -f"
     exit 1
 fi
 EOF
 
   chmod +x execute.sh
   
-  # Fix docker-compose.yml untuk privileged mode
+  # Update docker-compose.yml dengan volumes untuk system access
   cat > docker-compose.yml << 'EOF'
 version: "3.8"
 services:
@@ -242,19 +336,24 @@ services:
       WORKER_NAME: "YOUR_WORKER_NAME"
       OLLAMA_HOST: "http://localhost:11434"
       CUDA_VISIBLE_DEVICES: "0"
+    volumes:
+      # Mount proc filesystem untuk system info commands
+      - /proc:/proc:ro
+      # Mount sys untuk PCI device access
+      - /sys:/sys:ro
 EOF
 
-  ok "Kuzco files fixed with enhanced fake GPU"
+  ok "Complete fake environment setup applied"
 }
 
 setup_kuzco(){
   local code="$1" name="$2"
-  echo -e "${YELLOW}Setting up Kuzco Worker with Enhanced Fake GPU...${RESET}"
+  echo -e "${YELLOW}Setting up Kuzco Worker with Complete Fake Environment...${RESET}"
   
   cd "$KUZCO_DIR"
   
-  # Fix files dulu
-  fix_kuzco_files
+  # Setup complete fake environment
+  setup_complete_fake_environment
   
   # Patch docker-compose.yml dengan worker code & name
   sed -i "s|YOUR_WORKER_CODE|$code|g" docker-compose.yml
@@ -264,7 +363,7 @@ setup_kuzco(){
   docker-compose build
   docker-compose up -d
   
-  ok "Kuzco Worker started with Enhanced Fake GPU RTX 4090"
+  ok "Kuzco Worker started with Complete Fake Environment"
 }
 
 compose_logs_hyperbolic(){
@@ -309,15 +408,20 @@ check_status(){
     echo -e "${RED}✗ Hyperbolic API: NOT RESPONDING${RESET}"
   fi
   
-  # Test Enhanced Fake GPU in Kuzco container
+  # Test Complete Fake Environment in Kuzco container
   if docker ps | grep -q kuzco-main; then
-    echo -e "${YELLOW}Testing Enhanced Fake GPU...${RESET}"
+    echo -e "${YELLOW}Testing Complete Fake Environment...${RESET}"
     if docker exec kuzco-main sh -c "nvidia-smi --query-gpu=uuid,driver_version,name,memory.total,pci.bus_id --format=csv,noheader,nounits" >/dev/null 2>&1; then
-      echo -e "${GREEN}✓ Enhanced Fake GPU: WORKING${RESET}"
-      echo -e "${CYAN}GPU Info:${RESET}"
-      docker exec kuzco-main nvidia-smi --query-gpu=uuid,driver_version,name,memory.total,pci.bus_id --format=csv,noheader,nounits
+      echo -e "${GREEN}✓ Fake GPU: WORKING${RESET}"
     else
-      echo -e "${RED}✗ Enhanced Fake GPU: NOT WORKING${RESET}"
+      echo -e "${RED}✗ Fake GPU: NOT WORKING${RESET}"
+    fi
+    
+    # Test PCI device access
+    if docker exec kuzco-main sh -c "cat /sys/bus/pci/devices/0000:01:00.0/vendor" >/dev/null 2>&1; then
+      echo -e "${GREEN}✓ PCI Devices: ACCESSIBLE${RESET}"
+    else
+      echo -e "${RED}✗ PCI Devices: NOT ACCESSIBLE${RESET}"
     fi
   fi
   
@@ -352,7 +456,7 @@ install_all(){
   echo -e "${CYAN}Hyperbolic Server:${RESET} http://localhost:11434"
   echo -e "${CYAN}Install Directory:${RESET} $INSTALL_DIR"
   echo -e "${CYAN}Worker Name:${RESET} $NAME"
-  echo -e "${CYAN}Fake GPU:${RESET} Enhanced NVIDIA GeForce RTX 4090"
+  echo -e "${CYAN}Fake Environment:${RESET} Complete GPU & System Simulation"
   echo
   check_status
 }
@@ -369,18 +473,19 @@ view_instructions(){
   echo -e "   Visit: https://inference.net"
   echo -e "   Create worker and get worker code"
   echo
-  echo -e "${GREEN}3. Enhanced Fake GPU Features:${RESET}"
+  echo -e "${GREEN}3. Complete Fake Environment Features:${RESET}"
   echo -e "   ✅ Fake NVIDIA GeForce RTX 4090"
-  echo -e "   ✅ Handle nvidia-smi --query-gpu commands"
-  echo -e "   ✅ Fake GPU UUID, driver version, memory info"
-  echo -e "   ✅ Automatic GPU detection bypass"
+  echo -e "   ✅ Fake PCI device files (/sys/bus/pci)"
+  echo -e "   ✅ Fake system commands (df, lsof, fuser, cat)"
+  echo -e "   ✅ Fake GPU device nodes (/dev/nvidia*)"
+  echo -e "   ✅ Complete system simulation based on ViKey logs"
   echo
   echo -e "${GREEN}4. Useful Commands:${RESET}"
   echo -e "   View Hyperbolic logs: cd $HYPERBOLIC_DIR && docker-compose logs -f"
   echo -e "   View Kuzco logs: cd $KUZCO_DIR && docker-compose logs -f"
   echo -e "   Stop all: cd $INSTALL_DIR && ./stop-all.sh"
   echo -e "   Restart all: cd $INSTALL_DIR && ./restart-all.sh"
-  echo -e "   Test Enhanced Fake GPU: docker exec kuzco-main nvidia-smi --query-gpu=uuid,driver_version,name,memory.total,pci.bus_id --format=csv,noheader,nounits"
+  echo -e "   Test Fake GPU: docker exec kuzco-main nvidia-smi --query-gpu=uuid,driver_version,name,memory.total,pci.bus_id --format=csv,noheader,nounits"
   echo
   echo -e "${GREEN}5. Troubleshooting:${RESET}"
   echo -e "   Check status: docker ps"
@@ -427,18 +532,22 @@ echo "  Hyperbolic: cd hyperbolic-inference && docker-compose logs -f"
 echo "  Kuzco: cd kuzco-main && docker-compose logs -f"
 EOF
 
-  # Create test-gpu.sh (enhanced version)
-  cat > "$INSTALL_DIR/test-gpu.sh" << 'EOF'
+  # Create test-environment.sh (enhanced version)
+  cat > "$INSTALL_DIR/test-environment.sh" << 'EOF'
 #!/bin/bash
-echo "=== Testing Enhanced Fake GPU in Kuzco Container ==="
+echo "=== Testing Complete Fake Environment in Kuzco Container ==="
 echo
-echo "1. Basic nvidia-smi:"
-docker exec kuzco-main nvidia-smi
-echo
-echo "2. Detailed GPU Query (what Kuzco uses):"
+echo "1. Testing nvidia-smi (basic):"
 docker exec kuzco-main nvidia-smi --query-gpu=uuid,driver_version,name,memory.total,pci.bus_id --format=csv,noheader,nounits
 echo
-echo "3. nvidia-detector:"
+echo "2. Testing PCI device access:"
+docker exec kuzco-main cat /sys/bus/pci/devices/0000:01:00.0/vendor
+docker exec kuzco-main cat /sys/bus/pci/devices/0000:01:00.0/device
+echo
+echo "3. Testing system commands:"
+docker exec kuzco-main df -h
+echo
+echo "4. Testing nvidia-detector:"
 docker exec kuzco-main nvidia-detector
 EOF
 
@@ -455,7 +564,7 @@ main_menu(){
     echo -e "  ${GREEN}3.${RESET} View Logs - Kuzco Worker" 
     echo -e "  ${GREEN}4.${RESET} Stop All Services"
     echo -e "  ${GREEN}5.${RESET} Check Status"
-    echo -e "  ${GREEN}6.${RESET} Test Enhanced Fake GPU"
+    echo -e "  ${GREEN}6.${RESET} Test Complete Environment"
     echo -e "  ${GREEN}7.${RESET} Reinstall All Services"
     echo -e "  ${GREEN}8.${RESET} Quick Instructions"
     echo -e "  ${GREEN}9.${RESET} Exit"
@@ -484,9 +593,9 @@ main_menu(){
         pause
         ;;
       6)
-        echo -e "${YELLOW}Testing Enhanced Fake GPU...${RESET}"
-        if [ -f "$INSTALL_DIR/test-gpu.sh" ]; then
-          "$INSTALL_DIR/test-gpu.sh"
+        echo -e "${YELLOW}Testing Complete Fake Environment...${RESET}"
+        if [ -f "$INSTALL_DIR/test-environment.sh" ]; then
+          "$INSTALL_DIR/test-environment.sh"
         else
           docker exec kuzco-main nvidia-smi --query-gpu=uuid,driver_version,name,memory.total,pci.bus_id --format=csv,noheader,nounits
         fi
