@@ -12,3 +12,10 @@ services:
       WORKER_NAME: "YOUR_WORKER_NAME"
       OLLAMA_HOST: "http://localhost:11434"
       CUDA_VISIBLE_DEVICES: "0"
+      CPU_COUNT: "8"
+      CPU_MODEL: "Intel Xeon Processor (Cascadelake)"
+      # Environment variables untuk bypass system checks
+      DISABLE_SYSTEM_CHECKS: "1"
+      SKIP_HARDWARE_VALIDATION: "1"
+    volumes:
+      - /proc:/proc:ro  # Read-only access to proc for system info
