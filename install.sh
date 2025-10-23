@@ -3,7 +3,7 @@ set -euo pipefail
 
 # ========= Konfigurasi repo =========
 REPO_URL="https://github.com/GoldVPS/hyperbolic-kuzco-setup.git"
-INSTALL_DIR="$HOME/hyperbolic-kuzco-setup"
+INSTALL_DIR="/root/hyperbolic-kuzco-setup"
 HYPERBOLIC_DIR="$INSTALL_DIR/hyperbolic-inference"
 KUZCO_DIR="$INSTALL_DIR/kuzco-main"
 
@@ -16,8 +16,6 @@ ok(){ echo -e "${GREEN}✔ $*${RESET}"; }
 warn(){ echo -e "${YELLOW}⚠ $*${RESET}"; }
 err(){ echo -e "${RED}✖ $*${RESET}" >&2; }
 pause(){ read -n 1 -s -r -p "Press any key to return to menu"; echo; }
-
-need_sudo(){ command -v sudo >/dev/null 2>&1 || { err "sudo tidak tersedia."; exit 1; }; }
 
 header(){
   clear
@@ -37,25 +35,22 @@ header(){
   echo -e "${NC}"
   echo -e "🚀 ${LGOLD}Hyperbolic Kuzco Node Installer${NC} – Powered by ${LGOLD}GoldVPS Team${NC} 🚀"
   echo -e "🌐 ${ULINE}https://goldvps.net${NC} – Best VPS with Low Price"
+  echo -e "👤 ${YELLOW}Running as: $(whoami)${NC}"
   echo ""
 }
 
 install_docker(){
-  echo -e "${YELLOW}Installing / updating Docker...${RESET}"
+  echo -e "${YELLOW}Installing Docker...${RESET}"
   if ! command -v docker >/dev/null 2>&1; then
-    need_sudo
-    sudo apt-get update -y
-    sudo apt-get install -y ca-certificates curl gnupg git lsb-release
-    sudo install -m 0755 -d /etc/apt/keyrings
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor \
-      -o /etc/apt/keyrings/docker.gpg
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
-https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" \
-      | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
-    sudo apt-get update -y
-    sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
-    sudo systemctl enable docker
-    sudo systemctl start docker
+    apt-get update -y
+    apt-get install -y ca-certificates curl gnupg git lsb-release
+    install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list >/dev/null
+    apt-get update -y
+    apt-get install -y docker-ce docker-ce-cli containerd.io
+    systemctl enable docker
+    systemctl start docker
   fi
   ok "Docker ready"
 }
@@ -63,18 +58,17 @@ https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" \
 install_docker_compose(){
   echo -e "${YELLOW}Installing Docker Compose...${RESET}"
   if ! command -v docker-compose >/dev/null 2>&1; then
-    need_sudo
-    sudo curl -L "https://github.com/docker/compose/releases/download/v2.24.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-    sudo chmod +x /usr/local/bin/docker-compose
+    curl -L "https://github.com/docker/compose/releases/download/v2.24.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+    chmod +x /usr/local/bin/docker-compose
   fi
   ok "Docker Compose ready"
 }
 
 clone_repo(){
-  echo -e "${YELLOW}Sync repo...${RESET}"
+  echo -e "${YELLOW}Syncing repository...${RESET}"
   rm -rf "$INSTALL_DIR"
-  git clone --depth 1 "$REPO_URL" "$INSTALL_DIR" || { err "Gagal clone repo."; exit 1; }
-  ok "Repo tersalin ke $INSTALL_DIR"
+  git clone --depth 1 "$REPO_URL" "$INSTALL_DIR" || { err "Failed to clone repository."; exit 1; }
+  ok "Repository cloned to $INSTALL_DIR"
 }
 
 setup_hyperbolic(){
@@ -83,15 +77,15 @@ setup_hyperbolic(){
   
   cd "$HYPERBOLIC_DIR"
   
-  # Buat file .env dari template
+  # Create .env from template
   cp .env.example .env
   sed -i "s|your_hyperbolic_api_key_here|$api_key|g" .env
   
-  # Build dan run
+  # Build and run
   docker-compose build
   docker-compose up -d
   
-  # Tunggu dan test
+  # Wait and test
   echo -e "${YELLOW}Waiting for Hyperbolic server to start...${RESET}"
   sleep 15
   
@@ -100,6 +94,7 @@ setup_hyperbolic(){
     ok "Hyperbolic Inference Server running on port 11434"
   else
     err "Hyperbolic server failed to start"
+    docker-compose logs
     return 1
   fi
 }
@@ -114,7 +109,7 @@ setup_kuzco(){
   sed -i "s|YOUR_WORKER_CODE|$code|g" docker-compose.yml
   sed -i "s|YOUR_WORKER_NAME|$name|g" docker-compose.yml
   
-  # Build dan run
+  # Build and run
   docker-compose build
   docker-compose up -d
   
@@ -162,16 +157,20 @@ check_status(){
   else
     echo -e "${RED}✗ Hyperbolic API: NOT RESPONDING${RESET}"
   fi
+  
+  # Show container info
+  echo -e "\n${YELLOW}Running containers:${RESET}"
+  docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 }
 
 install_all(){
   echo -ne "${CYAN}Enter Hyperbolic API Key: ${RESET}"
   read -s -r API_KEY; echo
-  [[ -n "$API_KEY" ]] || { err "API key wajib diisi"; pause; continue; }
+  [[ -n "$API_KEY" ]] || { err "API key is required"; pause; return 1; }
 
   echo -ne "${CYAN}Enter Kuzco Worker Code: ${RESET}"
   read -r CODE
-  [[ -n "$CODE" ]] || { err "Worker code wajib diisi"; pause; continue; }
+  [[ -n "$CODE" ]] || { err "Worker code is required"; pause; return 1; }
 
   DEFAULT_NAME="kuzco-$(hostname)-$(date +%s)"
   echo -ne "${CYAN}Enter Worker Name [default: $DEFAULT_NAME]: ${RESET}"
@@ -188,8 +187,68 @@ install_all(){
   echo -e "${GREEN}🎉 Installation Complete!${RESET}"
   echo -e "${CYAN}Hyperbolic Server:${RESET} http://localhost:11434"
   echo -e "${CYAN}Install Directory:${RESET} $INSTALL_DIR"
+  echo -e "${CYAN}Worker Name:${RESET} $NAME"
   echo
   check_status
+}
+
+view_instructions(){
+  clear
+  echo -e "${LGOLD}=== Quick Instructions ===${NC}"
+  echo
+  echo -e "${GREEN}1. Get Hyperbolic API Key:${RESET}"
+  echo -e "   Visit: https://hyperbolic.xyz"
+  echo -e "   Sign up and get your API key"
+  echo
+  echo -e "${GREEN}2. Get Kuzco Worker Code:${RESET}"
+  echo -e "   Visit: https://inference.net"
+  echo -e "   Create worker and get worker code"
+  echo
+  echo -e "${GREEN}3. Useful Commands:${RESET}"
+  echo -e "   View Hyperbolic logs: cd $HYPERBOLIC_DIR && docker-compose logs -f"
+  echo -e "   View Kuzco logs: cd $KUZCO_DIR && docker-compose logs -f"
+  echo -e "   Stop all: cd $INSTALL_DIR && ./stop-all.sh"
+  echo -e "   Restart all: cd $INSTALL_DIR && ./restart-all.sh"
+  echo
+  echo -e "${GREEN}4. Troubleshooting:${RESET}"
+  echo -e "   Check status: docker ps"
+  echo -e "   Check logs: docker logs <container-name>"
+  echo -e "   Restart service: docker-compose restart"
+  echo
+  pause
+}
+
+create_management_scripts(){
+  echo -e "${YELLOW}Creating management scripts...${RESET}"
+  
+  # Create stop-all.sh
+  cat > "$INSTALL_DIR/stop-all.sh" << 'EOF'
+#!/bin/bash
+echo "Stopping all Hyperbolic Kuzco services..."
+cd hyperbolic-inference && docker-compose down
+cd ../kuzco-main && docker-compose down
+echo "All services stopped!"
+EOF
+
+  # Create restart-all.sh
+  cat > "$INSTALL_DIR/restart-all.sh" << 'EOF'
+#!/bin/bash
+echo "Restarting all Hyperbolic Kuzco services..."
+cd hyperbolic-inference && docker-compose restart
+cd ../kuzco-main && docker-compose restart
+echo "All services restarted!"
+EOF
+
+  # Create status.sh
+  cat > "$INSTALL_DIR/status.sh" << 'EOF'
+#!/bin/bash
+echo "=== Service Status ==="
+cd hyperbolic-inference && echo "Hyperbolic:" && docker-compose ps
+cd ../kuzco-main && echo "Kuzco:" && docker-compose ps
+EOF
+
+  chmod +x "$INSTALL_DIR"/*.sh
+  ok "Management scripts created"
 }
 
 main_menu(){
@@ -202,13 +261,15 @@ main_menu(){
     echo -e "  ${GREEN}4.${RESET} Stop All Services"
     echo -e "  ${GREEN}5.${RESET} Check Status"
     echo -e "  ${GREEN}6.${RESET} Reinstall All Services"
-    echo -e "  ${GREEN}7.${RESET} Exit"
+    echo -e "  ${GREEN}7.${RESET} Quick Instructions"
+    echo -e "  ${GREEN}8.${RESET} Exit"
     echo -e "${LINE}"
-    read -p "Select an option (1–7): " opt
+    read -p "Select an option (1–8): " opt
 
     case "$opt" in
       1)
         install_all
+        create_management_scripts
         pause
         ;;
       2)
@@ -231,15 +292,18 @@ main_menu(){
         compose_down_hyperbolic
         compose_down_kuzco
         rm -rf "$INSTALL_DIR"
-        ok "Reinstall ready. Pilih menu 1 untuk install ulang."
+        ok "Reinstall ready. Select menu 1 to reinstall."
         pause
         ;;
       7)
+        view_instructions
+        ;;
+      8)
         echo -e "${CYAN}Thank you for using GoldVPS!${RESET}"
         exit 0
         ;;
       *)
-        err "Invalid option. Choose 1–7."
+        err "Invalid option. Choose 1–8."
         sleep 1
         ;;
     esac
@@ -247,18 +311,11 @@ main_menu(){
 }
 
 # Check if running as root
-if [[ $EUID -eq 0 ]]; then
-   err "Jangan jalankan sebagai root! Gunakan user biasa."
+if [[ $EUID -ne 0 ]]; then
+   err "This script must be run as root!"
+   echo "Switch to root user: sudo su -"
    exit 1
 fi
 
-# Add user to docker group if needed
-if ! groups $USER | grep -q '\bdocker\b'; then
-  warn "User $USER not in docker group. Adding..."
-  need_sudo
-  sudo usermod -aG docker $USER
-  warn "Please logout and login again, or run: newgrp docker"
-  exit 1
-fi
-
+# Main execution
 main_menu
