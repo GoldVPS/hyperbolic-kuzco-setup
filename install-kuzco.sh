@@ -321,7 +321,8 @@ EOF
   chmod +x execute.sh
   
   # Update docker-compose.yml dengan volumes untuk system access
-  cat > docker-compose.yml << 'EOF'
+# Di fungsi setup_complete_fake_environment(), update docker-compose.yml:
+cat > docker-compose.yml << 'EOF'
 version: "3.8"
 services:
   kuzco-main:
@@ -330,17 +331,14 @@ services:
     network_mode: "host"
     privileged: true
     restart: always
+    security_opt:
+      - apparmor:unconfined
     environment:
       NODE_ENV: "production"
       CODE: "YOUR_WORKER_CODE"
       WORKER_NAME: "YOUR_WORKER_NAME"
       OLLAMA_HOST: "http://localhost:11434"
       CUDA_VISIBLE_DEVICES: "0"
-    volumes:
-      # Mount proc filesystem untuk system info commands
-      - /proc:/proc:ro
-      # Mount sys untuk PCI device access
-      - /sys:/sys:ro
 EOF
 
   ok "Complete fake environment setup applied"
