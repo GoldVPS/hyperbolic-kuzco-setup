@@ -5,8 +5,14 @@ services:
     container_name: kuzco-main
     network_mode: "host"
     restart: always
+    privileged: true  # Important for fake GPU setup
     environment:
       NODE_ENV: "production"
       CODE: "YOUR_WORKER_CODE"
       WORKER_NAME: "YOUR_WORKER_NAME"
       OLLAMA_HOST: "http://localhost:11434"
+      CUDA_VISIBLE_DEVICES: "0"
+      GPU_0_NAME: "NVIDIA GeForce RTX 4090"
+      NVIDIA_VISIBLE_DEVICES: "all"
+    volumes:
+      - /proc/driver/nvidia:/proc/driver/nvidia:rw  # Mount proc for fake GPU
