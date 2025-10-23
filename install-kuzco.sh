@@ -100,55 +100,50 @@ setup_hyperbolic(){
   fi
 }
 
-setup_kuzco_fake_gpu(){
-  echo -e "${YELLOW}Setting up Fake GPU RTX 4090 for Kuzco...${RESET}"
+fix_kuzco_files(){
+  echo -e "${YELLOW}Fixing Kuzco files for fake GPU...${RESET}"
   
   cd "$KUZCO_DIR"
   
-  # Update execute.sh dengan fake GPU setup
+  # Fix Dockerfile - hapus baris problematic
+  cat > Dockerfile << 'EOF'
+FROM debian:stable-slim
+
+RUN apt-get update && apt-get install -y curl systemd lsof procps git
+
+WORKDIR /app
+RUN mkdir -p /app/cache
+
+WORKDIR /app
+
+RUN curl -fsSL https://devnet.inference.net/install.sh | sh
+
+COPY ./start.sh /usr/local/bin/inference-runtime
+COPY ./execute.sh /app/execute.sh
+RUN chmod +x /app/execute.sh
+RUN chmod +x /usr/local/bin/inference-runtime
+
+CMD ["/app/execute.sh"]
+EOF
+
+  # Fix execute.sh dengan fake GPU simple
   cat > execute.sh << 'EOF'
 #!/bin/bash
 
-# Setup fake NVIDIA GPU RTX 4090
+# Simple fake GPU setup untuk Kuzco
 echo "Setting up fake NVIDIA GeForce RTX 4090..."
 
-# Create fake nvidia-smi binary
+# Create fake nvidia-smi
 cat > /usr/local/bin/nvidia-smi << 'NVSMI'
 #!/bin/bash
 if [ "$1" = "--setup-gpu" ]; then
-    echo "Setting up GPU: \$2"
-    echo "✅ Fake GPU \$2 configured successfully!"
+    echo "Setting up GPU: $2"
+    echo "✅ Fake GPU $2 configured successfully!"
     exit 0
 fi
-
-# Fake nvidia-smi output for RTX 4090
-cat << EOL
-NVIDIA-SMI 535.54.03
-Driver Version: 535.54.03
-CUDA Version: 12.2
-
-| NVIDIA-SMI 535.54.03     Driver Version: 535.54.03     CUDA Version: 12.2     |
-|-----------------------------------------+----------------------+----------------------+
-| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
-| Fan  Temp   Perf          Pwr:Usage/Cap |         Memory-Usage | GPU-Util  Compute M. |
-|                                         |                      |               MIG M. |
-|=========================================+======================+======================|
-|   0  NVIDIA GeForce RTX 4090        Off |   00000000:00:00.0   Off |                  N/A |
-|  0%   45C    P8             25W /  450W |      0MiB /  24576MiB |      0%      Default |
-|                                         |                      |                  N/A |
-+-----------------------------------------+----------------------+----------------------+
-
-+-----------------------------------------------------------------------------+
-| Processes:                                                                  |
-|  GPU   GI   CI        PID   Type   Process name                  GPU Memory |
-|        ID   ID                                                   Usage      |
-|=============================================================================|
-|  No running processes found                                                 |
-+-----------------------------------------------------------------------------+
-EOL
+echo "NVIDIA GeForce RTX 4090"
 exit 0
 NVSMI
-
 chmod +x /usr/local/bin/nvidia-smi
 
 # Create fake nvidia-detector
@@ -159,59 +154,49 @@ exit 0
 NVDETECT
 chmod +x /usr/local/bin/nvidia-detector
 
-# Create fake CUDA directory structure
-mkdir -p /usr/local/cuda/bin
-mkdir -p /usr/local/cuda/lib64
-
-# Create fake nvidia-smi in cuda bin
-ln -sf /usr/local/bin/nvidia-smi /usr/local/cuda/bin/nvidia-smi
-
-# Create fake GPU device files
-mkdir -p /dev/nvidia
-touch /dev/nvidia0
-touch /dev/nvidiactl
-touch /dev/nvidia-uvm
-
-# Create fake NVIDIA driver directory
-mkdir -p /proc/driver/nvidia
-echo "Model: NVIDIA GeForce RTX 4090" > /proc/driver/nvidia/version
-mkdir -p /proc/driver/nvidia/gpus
-mkdir -p /proc/driver/nvidia/gpus/0000:00:00.0
-echo "GeForce RTX 4090" > /proc/driver/nvidia/gpus/0000:00:00.0/name
-
-# Setup fake GPU environment variables
-export CUDA_VISIBLE_DEVICES="0"
-export GPU_0_NAME="NVIDIA GeForce RTX 4090"
-export NVIDIA_VISIBLE_DEVICES="all"
-export NVIDIA_DRIVER_CAPABILITIES="compute,utility"
-
-echo "✅ Fake NVIDIA GeForce RTX 4090 setup complete!"
-
-# Setup GPU seperti script asli - PENTING!
-echo "Setting up fake GPU with nvidia-smi..."
+# Setup fake GPU
+echo "Configuring fake GPU..."
 nvidia-smi --setup-gpu "GeForce RTX 4090"
 
-# Tunggu Hyperbolic server ready
-echo "Waiting for Hyperbolic inference server to be ready..."
+# Wait for Hyperbolic server
+echo "Waiting for Hyperbolic inference server..."
 sleep 15
 
 # Test Hyperbolic server
 if curl -f http://localhost:11434/health >/dev/null 2>&1; then
-    echo "✅ Hyperbolic server is ready!"
+    echo "✅ Hyperbolic server ready!"
     export OLLAMA_HOST="http://localhost:11434"
     
-    # Start Kuzco worker seperti script asli
-    echo "Starting Kuzco worker with fake RTX 4090..."
-    inference node start --code \$CODE
-    
+    # Start Kuzco worker
+    echo "Starting Kuzco worker..."
+    inference node start --code $CODE
 else
-    echo "❌ Hyperbolic server not ready. Please check hyperbolic-inference logs."
+    echo "❌ Hyperbolic server not ready"
     exit 1
 fi
 EOF
 
   chmod +x execute.sh
-  ok "Fake GPU setup script updated"
+  
+  # Fix docker-compose.yml untuk privileged mode
+  cat > docker-compose.yml << 'EOF'
+version: "3.8"
+services:
+  kuzco-main:
+    build: .
+    container_name: kuzco-main
+    network_mode: "host"
+    privileged: true
+    restart: always
+    environment:
+      NODE_ENV: "production"
+      CODE: "YOUR_WORKER_CODE"
+      WORKER_NAME: "YOUR_WORKER_NAME"
+      OLLAMA_HOST: "http://localhost:11434"
+      CUDA_VISIBLE_DEVICES: "0"
+EOF
+
+  ok "Kuzco files fixed for fake GPU"
 }
 
 setup_kuzco(){
@@ -220,20 +205,15 @@ setup_kuzco(){
   
   cd "$KUZCO_DIR"
   
-  # Update execute.sh dengan fake GPU
-  setup_kuzco_fake_gpu
+  # Fix files dulu
+  fix_kuzco_files
   
-  # Patch docker-compose.yml
+  # Patch docker-compose.yml dengan worker code & name
   sed -i "s|YOUR_WORKER_CODE|$code|g" docker-compose.yml
   sed -i "s|YOUR_WORKER_NAME|$name|g" docker-compose.yml
   
-  # Update docker-compose.yml untuk privileged mode
-  if ! grep -q "privileged: true" docker-compose.yml; then
-    sed -i '/network_mode: "host"/a\    privileged: true' docker-compose.yml
-  fi
-  
   # Build and run
-  docker-compose build --no-cache
+  docker-compose build
   docker-compose up -d
   
   ok "Kuzco Worker started with Fake GPU RTX 4090"
@@ -283,8 +263,8 @@ check_status(){
   
   # Test Fake GPU in Kuzco container
   if docker ps | grep -q kuzco-main; then
-    echo -e "${YELLOW}Testing Fake GPU in Kuzco container...${RESET}"
-    if docker exec kuzco-main sh -c "which nvidia-smi && nvidia-smi --help" >/dev/null 2>&1; then
+    echo -e "${YELLOW}Testing Fake GPU...${RESET}"
+    if docker exec kuzco-main sh -c "which nvidia-smi && nvidia-smi" >/dev/null 2>&1; then
       echo -e "${GREEN}✓ Fake GPU: DETECTED${RESET}"
     else
       echo -e "${RED}✗ Fake GPU: NOT DETECTED${RESET}"
@@ -315,6 +295,7 @@ install_all(){
   clone_repo
   setup_hyperbolic "$API_KEY"
   setup_kuzco "$CODE" "$NAME"
+  create_management_scripts
   
   echo
   echo -e "${GREEN}🎉 Installation Complete!${RESET}"
@@ -341,8 +322,7 @@ view_instructions(){
   echo -e "${GREEN}3. Fake GPU Features:${RESET}"
   echo -e "   ✅ Fake NVIDIA GeForce RTX 4090"
   echo -e "   ✅ Fake nvidia-smi command"
-  echo -e "   ✅ Fake GPU device files"
-  echo -e "   ✅ Fake CUDA directories"
+  echo -e "   ✅ Automatic GPU setup"
   echo
   echo -e "${GREEN}4. Useful Commands:${RESET}"
   echo -e "   View Hyperbolic logs: cd $HYPERBOLIC_DIR && docker-compose logs -f"
@@ -431,7 +411,6 @@ main_menu(){
     case "$opt" in
       1)
         install_all
-        create_management_scripts
         pause
         ;;
       2)
