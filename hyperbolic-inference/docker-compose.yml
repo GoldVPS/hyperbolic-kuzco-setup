@@ -5,8 +5,6 @@ services:
     build: .
     ports:
       - "11434:11434"
-      - "11434:11434"
-      - "11434:11434"
       - "14444:11434"
     environment:
       - HYPERBOLIC_API_URL=https://api.hyperbolic.xyz/v1
