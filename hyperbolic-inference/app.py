@@ -78,8 +78,8 @@ def generate():
 def list_models():
     return jsonify({
         "models": [{
-            "name": "llama2",
-            "model": "llama2",
+            "name": HYPERBOLIC_MODEL,
+            "model": HYPERBOLIC_MODEL,
             "modified_at": "2024-01-01T00:00:00Z",
             "size": 3000000000,
             "digest": "hyperbolic-llama3.2-3b",
