@@ -7,13 +7,12 @@ services:
     privileged: true
     restart: always
     security_opt:
-      - apparmor:unconfined  # ✅ TAMBAH INI
+      - apparmor:unconfined
     environment:
       NODE_ENV: "production"
-      CODE: "YOUR_WORKER_CODE"
+      CODE: "bb879af1-04f4-46a3-9aa6-dffa6c388d62"
       WORKER_NAME: "YOUR_WORKER_NAME"
       OLLAMA_HOST: "http://localhost:11434"
+      OLLAMA_ORIGINS: "*"
+      INFERENCE_ENGINE: "hyperbolic"
       CUDA_VISIBLE_DEVICES: "0"
-    volumes:
-      - /proc:/proc:ro
-      - /sys:/sys:ro
