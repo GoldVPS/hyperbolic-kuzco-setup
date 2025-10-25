@@ -1,26 +1,29 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ========= Konfigurasi repo =========
-REPO_URL="https://github.com/GoldVPS/hyperbolic-kuzco-setup.git"
+# ===========================
+#  GoldVPS Kuzco Installer
+#  Default model: meta-llama/Llama-3.2-3B-Instruct
+# ===========================
+
+# ---------- Konfigurasi ----------
+DEFAULT_MODEL="meta-llama/Llama-3.2-3B-Instruct"   # (Pilihan A)
 INSTALL_DIR="/root/hyperbolic-kuzco-setup"
-HYPERBOLIC_DIR="$INSTALL_DIR/hyperbolic-inference"
+HYP_DIR="$INSTALL_DIR/hyperbolic-inference"
 KUZCO_DIR="$INSTALL_DIR/kuzco-main"
 
-# ========= Warna =========
+# Warna + Branding
 GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; RESET='\033[0m'
-LGOLD='\e[1;33m'; ULINE='\e[4;33m'; NC='\e[0m'
+LGOLD='\e[1;33m'; NC='\e[0m'
 LINE="\e[38;5;220m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\e[0m"
 
 ok(){ echo -e "${GREEN}✔ $*${RESET}"; }
 warn(){ echo -e "${YELLOW}⚠ $*${RESET}"; }
 err(){ echo -e "${RED}✖ $*${RESET}" >&2; }
-pause(){ read -n 1 -s -r -p "Press any key to return to menu"; echo; }
 
 header(){
   clear
-  echo -e "${LGOLD}"
-  echo -e "\e[38;5;220m"
+  echo -e "${LGOLD}\e[38;5;220m"
   echo " ██████╗  ██████╗ ██╗     ██████╗ ██╗   ██╗██████╗ ███████╗"
   echo "██╔════╝ ██╔═══██╗██║     ██╔══██╗██║   ██║██╔══██╗██╔════╝"
   echo "██║  ███╗██║   ██║██║     ██║  ██║██║   ██║██████╔╝███████╗"
@@ -33,289 +36,292 @@ header(){
   echo
 }
 
+require_root(){
+  if [[ $EUID -ne 0 ]]; then
+    err "Harus dijalankan sebagai root. Jalankan: sudo su -"
+    exit 1
+  fi
+}
+
 install_docker(){
-  echo -e "${YELLOW}Installing Docker...${RESET}"
+  header
+  echo -e "${YELLOW}Installing Docker & Compose...${RESET}"
   if ! command -v docker >/dev/null 2>&1; then
     apt-get update -y
-    apt-get install -y ca-certificates curl gnupg git lsb-release
+    apt-get install -y ca-certificates curl gnupg git lsb-release jq
     install -m 0755 -d /etc/apt/keyrings
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list >/dev/null
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list
     apt-get update -y
     apt-get install -y docker-ce docker-ce-cli containerd.io
     systemctl enable docker
     systemctl start docker
   fi
-  ok "Docker ready"
-}
-
-install_docker_compose(){
-  echo -e "${YELLOW}Installing Docker Compose...${RESET}"
-  if ! command -v docker-compose >/dev/null 2>&1; then
-    curl -L "https://github.com/docker/compose/releases/download/v2.24.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-    chmod +x /usr/local/bin/docker-compose
+  # docker compose v2 (plugin modern)
+  if ! docker compose version >/dev/null 2>&1; then
+    curl -SL https://github.com/docker/compose/releases/download/v2.27.1/docker-compose-$(uname -s)-$(uname -m) -o /usr/local/bin/docker-compose
+    chmod +x /usr/local/bin/docker-compose || true
   fi
-  ok "Docker Compose ready"
+  ok "Docker siap"
 }
 
-clone_repo(){
-  echo -e "${YELLOW}Syncing repository...${RESET}"
+prepare_tree(){
+  header
+  echo -e "${YELLOW}Menyiapkan struktur direktori...${RESET}"
   rm -rf "$INSTALL_DIR"
-  git clone --depth 1 "$REPO_URL" "$INSTALL_DIR" || { err "Failed to clone repository."; exit 1; }
-  ok "Repository cloned to $INSTALL_DIR"
+  mkdir -p "$HYP_DIR" "$KUZCO_DIR"
+  ok "Direktori dibuat: $INSTALL_DIR"
 }
 
-setup_hyperbolic(){
-  local api_key="$1"
-  echo -e "${YELLOW}Setting up Hyperbolic Inference Server...${RESET}"
-  
-  cd "$HYPERBOLIC_DIR"
-  
-  # Create .env from template
-  cp .env.example .env
-  sed -i "s|your_hyperbolic_api_key_here|$api_key|g" .env
-  
-  # Build and run
-  docker-compose build
-  docker-compose up -d
-  
-  # Wait and test
-  echo -e "${YELLOW}Waiting for Hyperbolic server to start...${RESET}"
-  sleep 15
-  
-  # Test server
-  if curl -f http://localhost:11434/api/tags >/dev/null 2>&1; then
-    ok "Hyperbolic Inference Server running on port 11434"
-  else
-    err "Hyperbolic server failed to start"
-    docker-compose logs
-    return 1
-  fi
-}
+write_hyperbolic_files(){
+  header
+  echo -e "${YELLOW}Membuat Hyperbolic inference proxy (Flask/Gunicorn)...${RESET}"
 
-setup_complete_fake_environment(){
-  echo -e "${YELLOW}Setting up complete fake environment based on ViKey logs...${RESET}"
-  
-  cd "$KUZCO_DIR"
-  
-  # Fix Dockerfile
-  cat > Dockerfile << 'EOF'
-FROM debian:stable-slim
+  cat > "$HYP_DIR/app.py" <<'PY'
+from flask import Flask, request, jsonify, Response
+import requests, os
 
-RUN apt-get update && apt-get install -y curl systemd lsof procps git
+app = Flask(__name__)
 
+HYPERBOLIC_API_URL = os.getenv("HYPERBOLIC_API_URL", "https://api.hyperbolic.xyz/v1")
+HYPERBOLIC_API_KEY = os.getenv("HYPERBOLIC_API_KEY", "")
+HYPERBOLIC_MODEL   = os.getenv("HYPERBOLIC_MODEL", "meta-llama/Llama-3.2-3B-Instruct")
+
+def to_hyperbolic(payload):
+    # accept Ollama-style or OpenAI-style
+    messages = payload.get("messages") or []
+    prompt   = payload.get("prompt")
+    if prompt and not messages:
+        messages = [{"role":"user","content":prompt}]
+    return {
+        "model": HYPERBOLIC_MODEL,
+        "messages": messages,
+        "max_tokens": payload.get("max_tokens") or payload.get("max_tokens_to_sample") or 512,
+        "temperature": payload.get("temperature", 0.7),
+        "top_p": payload.get("top_p", 0.9),
+        "stream": payload.get("stream", False),
+        # jangan kirim logprobs biar aman ke worker (menghindari TypeError)
+        "logprobs": False
+    }
+
+def from_hyperbolic(resp_json, model_name=None):
+    choices = resp_json.get("choices", [])
+    content = choices[0].get("message",{}).get("content","") if choices else ""
+    return {
+        "model": model_name or HYPERBOLIC_MODEL,
+        "created_at": "",
+        "done": True,
+        "message": {"role":"assistant","content":content}
+    }
+
+@app.route("/api/chat", methods=["POST"])
+def api_chat():
+    try:
+        data = request.get_json(force=True)
+        hreq = to_hyperbolic(data)
+        r = requests.post(f"{HYPERBOLIC_API_URL}/chat/completions",
+                          json=hreq,
+                          headers={"Authorization": f"Bearer {HYPERBOLIC_API_KEY}",
+                                   "Content-Type":"application/json"},
+                          timeout=60)
+        if r.status_code != 200:
+            return jsonify({"error": f"Hyperbolic API {r.status_code}", "body": r.text}), 500
+        return jsonify(from_hyperbolic(r.json(), data.get("model")))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/v1/chat/completions", methods=["POST"])
+def openai_chat():
+    try:
+        data = request.get_json(force=True)
+        data["model"] = HYPERBOLIC_MODEL
+        r = requests.post(f"{HYPERBOLIC_API_URL}/chat/completions",
+                          json=data,
+                          headers={"Authorization": f"Bearer {HYPERBOLIC_API_KEY}",
+                                   "Content-Type":"application/json"},
+                          timeout=60)
+        return Response(r.content, status=r.status_code,
+                        content_type=r.headers.get("content-type","application/json"))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/tags", methods=["GET"])
+def tags():
+    return jsonify({
+        "models":[{
+            "name": HYPERBOLIC_MODEL,
+            "model": HYPERBOLIC_MODEL,
+            "modified_at": "2024-01-01T00:00:00Z",
+            "size": 3000000000,
+            "digest": "hyperbolic-llama3.2-3b",
+            "details": {"format":"gguf","family":"llama","parameter_size":"3B"}
+        }]
+    })
+
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status":"healthy","model":HYPERBOLIC_MODEL})
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=11434, debug=False)
+PY
+
+  cat > "$HYP_DIR/requirements.txt" <<'REQ'
+flask==3.0.3
+gunicorn==21.2.0
+requests==2.32.3
+REQ
+
+  cat > "$HYP_DIR/Dockerfile" <<'DOCK'
+FROM python:3.11-slim
 WORKDIR /app
-RUN mkdir -p /app/cache
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY app.py .
+ENV PYTHONUNBUFFERED=1
+CMD ["gunicorn","-w","1","-k","gthread","--threads","8","-b","0.0.0.0:11434","--keep-alive","30","--access-logfile","-","--error-logfile","-","app:app"]
+DOCK
 
-WORKDIR /app
+  cat > "$HYP_DIR/docker-compose.yml" <<'YML'
+version: '3.8'
+services:
+  hyperbolic-inference:
+    build: .
+    container_name: hyperbolic-inference
+    environment:
+      - HYPERBOLIC_API_URL=${HYPERBOLIC_API_URL:-https://api.hyperbolic.xyz/v1}
+      - HYPERBOLIC_API_KEY=${HYPERBOLIC_API_KEY}
+      - HYPERBOLIC_MODEL=${HYPERBOLIC_MODEL:-meta-llama/Llama-3.2-3B-Instruct}
+    ports:
+      - "11434:11434"         # proxy utama
+      - "14444:11434"         # kompatibilitas OLLAMA_HOST lama
+    restart: always
+YML
 
-RUN curl -fsSL https://devnet.inference.net/install.sh | sh
-
-COPY ./start.sh /usr/local/bin/inference-runtime
-COPY ./execute.sh /app/execute.sh
-RUN chmod +x /app/execute.sh
-RUN chmod +x /usr/local/bin/inference-runtime
-
-CMD ["/app/execute.sh"]
+  cat > "$HYP_DIR/.env" <<EOF
+HYPERBOLIC_API_URL=https://api.hyperbolic.xyz/v1
+HYPERBOLIC_API_KEY=
+HYPERBOLIC_MODEL=$DEFAULT_MODEL
 EOF
 
-  # Create complete execute.sh based on ViKey logs
-  cat > execute.sh << 'EOF'
-#!/bin/bash
+  ok "Hyperbolic files dibuat"
+}
 
-# Complete fake environment based on ViKey startup logs
+write_kuzco_files(){
+  header
+  echo -e "${YELLOW}Membuat Kuzco worker + fake GPU env...${RESET}"
+
+  # start.sh kecil (opsional)
+  cat > "$KUZCO_DIR/start.sh" <<'SH'
+#!/usr/bin/env bash
+exec /app/execute.sh
+SH
+  chmod +x "$KUZCO_DIR/start.sh"
+
+  # execute.sh terbaru (fake env + IPv4 first + Hyperbolic OLLAMA_HOST)
+  cat > "$KUZCO_DIR/execute.sh" <<'SH'
+#!/bin/bash
+set -e
+
 echo "Setting up complete fake environment for Kuzco..."
 
-# Create fake nvidia-smi dengan format persis ViKey
+# Fake nvidia-smi
 cat > /usr/local/bin/nvidia-smi << 'NVSMI'
 #!/bin/bash
-
-# Handle --setup-gpu command (from original script)
 if [ "$1" = "--setup-gpu" ]; then
-    echo "Setting up GPU: $2"
-    echo "✅ Fake GPU $2 configured successfully!"
-    exit 0
+  echo "Setting up GPU: $2"
+  echo "✅ Fake GPU $2 configured successfully!"
+  exit 0
 fi
-
-# Handle the EXACT query that Kuzco uses (from ViKey logs)
 if [ "$1" = "--query-gpu=uuid,driver_version,name,memory.total,pci.bus_id" ] && [ "$2" = "--format=csv,noheader,nounits" ]; then
-    echo "GPU-fake-12345678-1234-1234-1234-123456789012,535.54.03,NVIDIA GeForce RTX 4090,24576,00000000:01:00.0"
-    exit 0
+  echo "GPU-fake-12345678-1234-1234-1234-123456789012,535.54.03,NVIDIA GeForce RTX 4090,24576,00000000:01:00.0"
+  exit 0
 fi
-
-# Default nvidia-smi output
 echo "NVIDIA-SMI 535.54.03"
-echo "Driver Version: 535.54.03"
-echo "CUDA Version: 12.2"
-echo ""
-echo "| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |"
-echo "| Fan  Temp   Perf          Pwr:Usage/Cap |         Memory-Usage | GPU-Util  Compute M. |"
-echo "|                                         |                      |               MIG M. |"
-echo "|=========================================+======================+======================|"
-echo "|   0  NVIDIA GeForce RTX 4090        Off |   00000000:01:00.0   Off |                  N/A |"
-echo "|  0%   45C    P8             25W /  450W |      0MiB /  24576MiB |      0%      Default |"
-echo "|                                         |                      |                  N/A |"
-echo "+-----------------------------------------+----------------------+----------------------+"
-echo ""
-echo "+-----------------------------------------------------------------------------+"
-echo "| Processes:                                                                  |"
-echo "|  GPU   GI   CI        PID   Type   Process name                  GPU Memory |"
-echo "|        ID   ID                                                   Usage      |"
-echo "|=============================================================================|"
-echo "|  No running processes found                                                 |"
-echo "+-----------------------------------------------------------------------------+"
 exit 0
 NVSMI
-
 chmod +x /usr/local/bin/nvidia-smi
 
-# Create fake nvidia-detector
-cat > /usr/local/bin/nvidia-detector << 'NVDETECT'
-#!/bin/bash
-echo "NVIDIA GeForce RTX 4090"
-exit 0
-NVDETECT
+# Fake helper
+echo "NVIDIA GeForce RTX 4090" > /usr/local/bin/nvidia-detector
 chmod +x /usr/local/bin/nvidia-detector
 
-# Create fake PCI device files (DARI LOGS VIKEY!)
-mkdir -p /sys/bus/pci/devices/0000:00:01.0
-echo "0x10de" > /sys/bus/pci/devices/0000:00:01.0/vendor
-echo "0x2684" > /sys/bus/pci/devices/0000:00:01.0/device
+# Safe create (container kadang deny write ke /sys)
+mkdir -p /sys/bus/pci/devices/0000:00:01.0 2>/dev/null || true
+{ echo "0x10de" > /sys/bus/pci/devices/0000:00:01.0/vendor || true; } 2>/dev/null
+{ echo "0x2684" > /sys/bus/pci/devices/0000:00:01.0/device || true; } 2>/dev/null
 
-# Juga buat untuk 00000000:01:00.0 (format berbeda)
-mkdir -p /sys/bus/pci/devices/0000:01:00.0
-echo "0x10de" > /sys/bus/pci/devices/0000:01:00.0/vendor
-echo "0x2684" > /sys/bus/pci/devices/0000:01:00.0/device
-
-# Create fake cat command untuk handle PCI device queries
-cat > /usr/local/bin/cat << 'CAT'
+# Fake df/lsof/fuser minimal
+cat > /usr/local/bin/df << 'DF'; echo '#'; chmod +x /usr/local/bin/df
 #!/bin/bash
-# Handle specific PCI device files that Kuzco checks
-if [[ "$*" == *"/sys/bus/pci/devices/0000:00:01.0/vendor"* ]]; then
-    echo "0x10de"
-    exit 0
-elif [[ "$*" == *"/sys/bus/pci/devices/0000:00:01.0/device"* ]]; then
-    echo "0x2684"
-    exit 0
-elif [[ "$*" == *"/sys/bus/pci/devices/0000:01:00.0/vendor"* ]]; then
-    echo "0x10de"
-    exit 0
-elif [[ "$*" == *"/sys/bus/pci/devices/0000:01:00.0/device"* ]]; then
-    echo "0x2684"
-    exit 0
-else
-    # For other files, use real cat
-    /bin/cat "$@"
-fi
-CAT
-chmod +x /usr/local/bin/cat
-
-# Create fake df command (DARI LOGS VIKEY!)
-cat > /usr/local/bin/df << 'DF'
-#!/bin/bash
-if [ "$1" = "-h" ]; then
-    echo "Filesystem      Size  Used Avail Use% Mounted on"
-    echo "overlay          50G   12G   36G  25% /"
-else
-    echo "Filesystem     1K-blocks    Used Available Use% Mounted on"
-    echo "overlay         52428800 12582912 37119588  25% /"
-fi
-exit 0
+echo "Filesystem      Size  Used Avail Use% Mounted on"
+echo "overlay          50G   12G   36G  25% /"
 DF
-chmod +x /usr/local/bin/df
-
-# Create fake lsof command (DARI LOGS VIKEY!)
-cat > /usr/local/bin/lsof << 'LSOF'
+cat > /usr/local/bin/lsof << 'LSOF'; echo '#'; chmod +x /usr/local/bin/lsof
 #!/bin/bash
-if [ "$1" = "-ti" ] && [ "$2" = ":8084" ]; then
-    # Return empty to indicate no process using port 8084
-    exit 0
-elif [ "$1" = "-ti" ] && [ "$2" = ":14445" ]; then
-    # Return empty to indicate no process using port 14445  
-    exit 0
-else
-    # For other lsof commands, return empty
-    exit 0
-fi
+exit 0
 LSOF
-chmod +x /usr/local/bin/lsof
-
-# Create fake fuser command (DARI LOGS VIKEY!)
-cat > /usr/local/bin/fuser << 'FUSER'
+cat > /usr/local/bin/fuser << 'FUSER'; echo '#'; chmod +x /usr/local/bin/fuser
 #!/bin/bash
-if [ "$1" = "-v" ] && [[ "$2" == /dev/nvidia* ]]; then
-    # Return empty to indicate no processes using nvidia devices
-    exit 0
-else
-    # For other fuser commands, return empty
-    exit 0
-fi
+exit 0
 FUSER
-chmod +x /usr/local/bin/fuser
 
-# Create fake kill command (untuk handle cleanup)
-cat > /usr/local/bin/kill << 'KILL'
-#!/bin/bash
-# Fake kill command - just return success
-if [ "$1" = "-9" ]; then
-    echo "Fake kill: Process $2 terminated"
-    exit 0
-else
-    /bin/kill "$@"
-fi
-KILL
-chmod +x /usr/local/bin/kill
-
-# Create fake /dev/nvidia devices
+# Fake /dev/nvidia*
 mkdir -p /dev
 mknod /dev/nvidia0 c 195 0 2>/dev/null || true
 mknod /dev/nvidiactl c 195 255 2>/dev/null || true
 mknod /dev/nvidia-modeset c 195 254 2>/dev/null || true
 
 echo "✅ Complete fake environment setup complete"
-
-# Setup GPU seperti script asli
 echo "Setting up fake GPU..."
 nvidia-smi --setup-gpu "GeForce RTX 4090"
 
-# Test semua commands yang digunakan Kuzco (dari logs ViKey)
 echo "Testing all Kuzco system commands..."
-echo "1. Testing nvidia-smi query:"
-nvidia-smi --query-gpu=uuid,driver_version,name,memory.total,pci.bus_id --format=csv,noheader,nounits
-echo "2. Testing PCI device files:"
-cat /sys/bus/pci/devices/0000:01:00.0/vendor
-cat /sys/bus/pci/devices/0000:01:00.0/device
-echo "3. Testing df:"
-df -h
-echo "4. Testing lsof:"
-lsof -ti :8084
-echo "5. Testing fuser:"
-fuser -v /dev/nvidia0
+echo "1. Testing nvidia-smi query:"; nvidia-smi --query-gpu=uuid,driver_version,name,memory.total,pci.bus_id --format=csv,noheader,nounits || true
+echo "2. Testing PCI device files:"; cat /sys/bus/pci/devices/0000:01:00.0/vendor 2>/dev/null || true; cat /sys/bus/pci/devices/0000:01:00.0/device 2>/dev/null || true
+echo "3. Testing df:"; df -h || true
+echo "4. Testing lsof:"; lsof -ti :8084 || true
+echo "5. Testing fuser:"; fuser -v /dev/nvidia0 || true
 
-# Wait for Hyperbolic server
+# IPv4 first (hindari IPv6-only)
+export NODE_OPTIONS="--dns-result-order=ipv4first"
+
+# Force OLLAMA_HOST ke proxy Hyperbolic
+export OLLAMA_HOST="http://localhost:11434"
+export OLLAMA_ORIGINS="*"
+
 echo "Waiting for Hyperbolic inference server..."
-sleep 10
-
-# Test Hyperbolic server
-if curl -f http://localhost:11434/health >/dev/null 2>&1; then
+for i in {1..30}; do
+  if curl -fsS http://localhost:11434/health >/dev/null; then
     echo "✅ Hyperbolic server ready!"
-    export OLLAMA_HOST="http://localhost:11434"
-    
-    # Start Kuzco worker
-    echo "Starting Kuzco worker with complete fake environment..."
-    inference node start --code $CODE
-else
-    echo "❌ Hyperbolic server not ready"
-    echo "Please check hyperbolic-inference logs: cd ~/hyperbolic-kuzco-setup/hyperbolic-inference && docker-compose logs -f"
-    exit 1
-fi
-EOF
+    break
+  fi
+  sleep 1
+done
 
-  chmod +x execute.sh
-  
-  # Update docker-compose.yml dengan volumes untuk system access
-# Di fungsi setup_complete_fake_environment(), update docker-compose.yml:
-cat > docker-compose.yml << 'EOF'
+if ! curl -fsS http://localhost:11434/health >/dev/null; then
+  echo "❌ Hyperbolic server not ready"; exit 1
+fi
+
+echo "Starting Kuzco worker with complete fake environment..."
+exec inference node start --code "${CODE}"
+SH
+  chmod +x "$KUZCO_DIR/execute.sh"
+
+  # Dockerfile
+  cat > "$KUZCO_DIR/Dockerfile" <<'DOCK'
+FROM debian:stable-slim
+RUN apt-get update && apt-get install -y curl systemd lsof procps git ca-certificates && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+RUN curl -fsSL https://devnet.inference.net/install.sh | sh
+COPY ./start.sh /usr/local/bin/inference-runtime
+COPY ./execute.sh /app/execute.sh
+RUN chmod +x /usr/local/bin/inference-runtime /app/execute.sh
+CMD ["/app/execute.sh"]
+DOCK
+
+  # docker-compose (host network + ipv4first)
+  cat > "$KUZCO_DIR/docker-compose.yml" <<'YML'
 version: "3.8"
 services:
   kuzco-main:
@@ -331,295 +337,160 @@ services:
       CODE: "YOUR_WORKER_CODE"
       WORKER_NAME: "YOUR_WORKER_NAME"
       OLLAMA_HOST: "http://localhost:11434"
+      OLLAMA_ORIGINS: "*"
+      INFERENCE_ENGINE: "hyperbolic"
       CUDA_VISIBLE_DEVICES: "0"
-EOF
+      NODE_OPTIONS: "--dns-result-order=ipv4first"
+YML
 
-  ok "Complete fake environment setup applied"
+  ok "Kuzco files dibuat"
 }
 
-setup_kuzco(){
-  local code="$1" name="$2"
-  echo -e "${YELLOW}Setting up Kuzco Worker with Complete Fake Environment...${RESET}"
-  
-  cd "$KUZCO_DIR"
-  
-  # Setup complete fake environment
-  setup_complete_fake_environment
-  
-  # Patch docker-compose.yml dengan worker code & name
-  sed -i "s|YOUR_WORKER_CODE|$code|g" docker-compose.yml
-  sed -i "s|YOUR_WORKER_NAME|$name|g" docker-compose.yml
-  
-  # Build and run
-  docker-compose build
-  docker-compose up -d
-  
-  ok "Kuzco Worker started with Complete Fake Environment"
+ask_config(){
+  header
+  echo -ne "${CYAN}Masukkan Hyperbolic API Key: ${RESET}"; read -r API_KEY
+  [[ -n "${API_KEY:-}" ]] || { err "API Key wajib diisi"; exit 1; }
+  echo -ne "${CYAN}Masukkan Kuzco Worker Code: ${RESET}"; read -r WORKER_CODE
+  [[ -n "${WORKER_CODE:-}" ]] || { err "Worker Code wajib diisi"; exit 1; }
+  local DEF_NAME="kuzco-$(hostname)-$(date +%s)"
+  echo -ne "${CYAN}Masukkan Worker Name [default: $DEF_NAME]: ${RESET}"; read -r WORKER_NAME
+  WORKER_NAME="${WORKER_NAME:-$DEF_NAME}"
+
+  # Tulis env
+  sed -i "s|^HYPERBOLIC_API_KEY=.*|HYPERBOLIC_API_KEY=$API_KEY|g" "$HYP_DIR/.env"
+  sed -i "s|^HYPERBOLIC_MODEL=.*|HYPERBOLIC_MODEL=$DEFAULT_MODEL|g" "$HYP_DIR/.env"
+
+  sed -i "s|YOUR_WORKER_CODE|$WORKER_CODE|g" "$KUZCO_DIR/docker-compose.yml"
+  sed -i "s|YOUR_WORKER_NAME|$WORKER_NAME|g" "$KUZCO_DIR/docker-compose.yml"
 }
 
-compose_logs_hyperbolic(){
-  ( cd "$HYPERBOLIC_DIR" && docker-compose logs -f --tail 100 )
+build_and_up(){
+  header
+  echo -e "${YELLOW}Build & start Hyperbolic proxy...${RESET}"
+  (cd "$HYP_DIR" && docker compose build && docker compose up -d)
+  sleep 3
+  echo -e "${YELLOW}Build & start Kuzco worker...${RESET}"
+  (cd "$KUZCO_DIR" && docker compose build && docker compose up -d)
+  ok "Semua service berjalan"
+  echo
+  echo -e "${GREEN}Test endpoints:${RESET}"
+  echo "  curl -s http://localhost:11434/health | jq"
+  echo "  curl -s http://localhost:11434/api/tags | jq"
+  echo "  curl -s http://localhost:11434/api/chat -H 'Content-Type: application/json' -d '{\"messages\":[{\"role\":\"user\",\"content\":\"test aja\"}]}' | jq"
 }
 
-compose_logs_kuzco(){
-  ( cd "$KUZCO_DIR" && docker-compose logs -f --tail 100 )
-}
-
-compose_down_hyperbolic(){
-  ( cd "$HYPERBOLIC_DIR" && docker-compose down || true )
-  ok "Hyperbolic Server stopped"
-}
-
-compose_down_kuzco(){
-  ( cd "$KUZCO_DIR" && docker-compose down || true )
-  ok "Kuzco Worker stopped"
-}
-
-check_status(){
-  echo -e "${YELLOW}Checking services status...${RESET}"
-  
-  # Check Hyperbolic
-  if ( cd "$HYPERBOLIC_DIR" && docker-compose ps | grep -q "Up" ); then
-    echo -e "${GREEN}✓ Hyperbolic Server: RUNNING${RESET}"
-  else
-    echo -e "${RED}✗ Hyperbolic Server: STOPPED${RESET}"
-  fi
-  
-  # Check Kuzco
-  if ( cd "$KUZCO_DIR" && docker-compose ps | grep -q "Up" ); then
-    echo -e "${GREEN}✓ Kuzco Worker: RUNNING${RESET}"
-  else
-    echo -e "${RED}✗ Kuzco Worker: STOPPED${RESET}"
-  fi
-  
-  # Test Hyperbolic API
-  if curl -s http://localhost:11434/health >/dev/null 2>&1; then
-    echo -e "${GREEN}✓ Hyperbolic API: RESPONDING${RESET}"
-  else
-    echo -e "${RED}✗ Hyperbolic API: NOT RESPONDING${RESET}"
-  fi
-  
-  # Test Complete Fake Environment in Kuzco container
-  if docker ps | grep -q kuzco-main; then
-    echo -e "${YELLOW}Testing Complete Fake Environment...${RESET}"
-    if docker exec kuzco-main sh -c "nvidia-smi --query-gpu=uuid,driver_version,name,memory.total,pci.bus_id --format=csv,noheader,nounits" >/dev/null 2>&1; then
-      echo -e "${GREEN}✓ Fake GPU: WORKING${RESET}"
-    else
-      echo -e "${RED}✗ Fake GPU: NOT WORKING${RESET}"
-    fi
-    
-    # Test PCI device access
-    if docker exec kuzco-main sh -c "cat /sys/bus/pci/devices/0000:01:00.0/vendor" >/dev/null 2>&1; then
-      echo -e "${GREEN}✓ PCI Devices: ACCESSIBLE${RESET}"
-    else
-      echo -e "${RED}✗ PCI Devices: NOT ACCESSIBLE${RESET}"
-    fi
-  fi
-  
-  # Show container info
-  echo -e "\n${YELLOW}Running containers:${RESET}"
+status_page(){
+  header
+  echo -e "${YELLOW}Status containers:${RESET}"
   docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+  echo
+  echo -e "${YELLOW}Test Hyperbolic:${RESET}"
+  if curl -fsS http://localhost:11434/health >/dev/null; then ok "Hyperbolic sehat"; else err "Hyperbolic tidak merespon"; fi
+  echo
+}
+
+logs_hyperbolic(){ header; (cd "$HYP_DIR" && docker compose logs -f --tail=200); }
+logs_kuzco(){ header; (cd "$KUZCO_DIR" && docker compose logs -f --tail=200); }
+
+stop_all(){
+  header
+  (cd "$KUZCO_DIR" && docker compose down || true)
+  (cd "$HYP_DIR" && docker compose down || true)
+  ok "Semua container dihentikan"
+}
+
+restart_all(){
+  header
+  (cd "$HYP_DIR" && docker compose restart || docker compose up -d)
+  (cd "$KUZCO_DIR" && docker compose restart || docker compose up -d)
+  ok "Semua container direstart"
+}
+
+change_model(){
+  header
+  echo -e "${YELLOW}Ganti model Hyperbolic (kosongkan untuk batal)${RESET}"
+  echo -e "Contoh: meta-llama/Llama-3.2-3B-Instruct  (saat ini: $DEFAULT_MODEL)"
+  read -p "Model baru: " NEWM || true
+  [[ -z "${NEWM:-}" ]] && { warn "Batal"; return; }
+  sed -i "s|^HYPERBOLIC_MODEL=.*|HYPERBOLIC_MODEL=$NEWM|g" "$HYP_DIR/.env"
+  (cd "$HYP_DIR" && docker compose up -d)
+  ok "Model diganti ke: $NEWM"
+}
+
+reconfig_keys(){
+  header
+  echo -ne "${CYAN}API Key baru (enter biar tetap): ${RESET}"; read -r NK || true
+  if [[ -n "${NK:-}" ]]; then sed -i "s|^HYPERBOLIC_API_KEY=.*|HYPERBOLIC_API_KEY=$NK|g" "$HYP_DIR/.env"; fi
+  (cd "$HYP_DIR" && docker compose up -d)
+  ok "API Key ter-update"
+}
+
+add_worker(){
+  header
+  echo -ne "${CYAN}Worker Code tambahan: ${RESET}"; read -r CODE
+  [[ -n "${CODE:-}" ]] || { err "Code wajib"; return; }
+  local NAME="kuzco-$(hostname)-$RANDOM"
+  local DIR="$INSTALL_DIR/kuzco-$RANDOM"
+  mkdir -p "$DIR"
+  cp -r "$KUZCO_DIR/"* "$DIR/"
+  sed -i "s|container_name: kuzco-main|container_name: ${NAME}|g" "$DIR/docker-compose.yml"
+  sed -i "s|YOUR_WORKER_CODE|$CODE|g" "$DIR/docker-compose.yml"
+  sed -i "s|YOUR_WORKER_NAME|$NAME|g" "$DIR/docker-compose.yml"
+  (cd "$DIR" && docker compose build && docker compose up -d)
+  ok "Worker baru jalan: $NAME"
+}
+
+uninstall_all(){
+  header
+  stop_all
+  rm -rf "$INSTALL_DIR"
+  ok "File dihapus: $INSTALL_DIR"
 }
 
 install_all(){
-  echo -ne "${CYAN}Enter Hyperbolic API Key: ${RESET}"
-  read -s -r API_KEY; echo
-  [[ -n "$API_KEY" ]] || { err "API key is required"; pause; return 1; }
-
-  echo -ne "${CYAN}Enter Kuzco Worker Code: ${RESET}"
-  read -r CODE
-  [[ -n "$CODE" ]] || { err "Worker code is required"; pause; return 1; }
-
-  DEFAULT_NAME="kuzco-$(hostname)-$(date +%s)"
-  echo -ne "${CYAN}Enter Worker Name [default: $DEFAULT_NAME]: ${RESET}"
-  read -r NAME
-  NAME=${NAME:-$DEFAULT_NAME}
-
   install_docker
-  install_docker_compose
-  clone_repo
-  setup_hyperbolic "$API_KEY"
-  setup_kuzco "$CODE" "$NAME"
-  create_management_scripts
-  
+  prepare_tree
+  write_hyperbolic_files
+  write_kuzco_files
+  ask_config
+  build_and_up
   echo
-  echo -e "${GREEN}🎉 Installation Complete!${RESET}"
-  echo -e "${CYAN}Hyperbolic Server:${RESET} http://localhost:11434"
-  echo -e "${CYAN}Install Directory:${RESET} $INSTALL_DIR"
-  echo -e "${CYAN}Worker Name:${RESET} $NAME"
-  echo -e "${CYAN}Fake Environment:${RESET} Complete GPU & System Simulation"
-  echo
-  check_status
+  status_page
 }
 
-view_instructions(){
-  clear
-  echo -e "${LGOLD}=== Quick Instructions ===${NC}"
-  echo
-  echo -e "${GREEN}1. Get Hyperbolic API Key:${RESET}"
-  echo -e "   Visit: https://hyperbolic.xyz"
-  echo -e "   Sign up and get your API key"
-  echo
-  echo -e "${GREEN}2. Get Kuzco Worker Code:${RESET}"
-  echo -e "   Visit: https://inference.net"
-  echo -e "   Create worker and get worker code"
-  echo
-  echo -e "${GREEN}3. Complete Fake Environment Features:${RESET}"
-  echo -e "   ✅ Fake NVIDIA GeForce RTX 4090"
-  echo -e "   ✅ Fake PCI device files (/sys/bus/pci)"
-  echo -e "   ✅ Fake system commands (df, lsof, fuser, cat)"
-  echo -e "   ✅ Fake GPU device nodes (/dev/nvidia*)"
-  echo -e "   ✅ Complete system simulation based on ViKey logs"
-  echo
-  echo -e "${GREEN}4. Useful Commands:${RESET}"
-  echo -e "   View Hyperbolic logs: cd $HYPERBOLIC_DIR && docker-compose logs -f"
-  echo -e "   View Kuzco logs: cd $KUZCO_DIR && docker-compose logs -f"
-  echo -e "   Stop all: cd $INSTALL_DIR && ./stop-all.sh"
-  echo -e "   Restart all: cd $INSTALL_DIR && ./restart-all.sh"
-  echo -e "   Test Fake GPU: docker exec kuzco-main nvidia-smi --query-gpu=uuid,driver_version,name,memory.total,pci.bus_id --format=csv,noheader,nounits"
-  echo
-  echo -e "${GREEN}5. Troubleshooting:${RESET}"
-  echo -e "   Check status: docker ps"
-  echo -e "   Check logs: docker logs <container-name>"
-  echo -e "   Restart service: docker-compose restart"
-  echo
-  pause
-}
-
-create_management_scripts(){
-  echo -e "${YELLOW}Creating management scripts...${RESET}"
-  
-  # Create stop-all.sh
-  cat > "$INSTALL_DIR/stop-all.sh" << 'EOF'
-#!/bin/bash
-echo "Stopping all Hyperbolic Kuzco services..."
-cd hyperbolic-inference && docker-compose down
-cd ../kuzco-main && docker-compose down
-echo "All services stopped!"
-EOF
-
-  # Create restart-all.sh
-  cat > "$INSTALL_DIR/restart-all.sh" << 'EOF'
-#!/bin/bash
-echo "Restarting all Hyperbolic Kuzco services..."
-cd hyperbolic-inference && docker-compose restart
-cd ../kuzco-main && docker-compose restart
-echo "All services restarted!"
-EOF
-
-  # Create status.sh
-  cat > "$INSTALL_DIR/status.sh" << 'EOF'
-#!/bin/bash
-echo "=== Hyperbolic Kuzco Services Status ==="
-echo
-echo "Hyperbolic Inference Server:"
-cd hyperbolic-inference && docker-compose ps
-echo
-echo "Kuzco Worker:"
-cd ../kuzco-main && docker-compose ps
-echo
-echo "For detailed logs:"
-echo "  Hyperbolic: cd hyperbolic-inference && docker-compose logs -f"
-echo "  Kuzco: cd kuzco-main && docker-compose logs -f"
-EOF
-
-  # Create test-environment.sh (enhanced version)
-  cat > "$INSTALL_DIR/test-environment.sh" << 'EOF'
-#!/bin/bash
-echo "=== Testing Complete Fake Environment in Kuzco Container ==="
-echo
-echo "1. Testing nvidia-smi (basic):"
-docker exec kuzco-main nvidia-smi --query-gpu=uuid,driver_version,name,memory.total,pci.bus_id --format=csv,noheader,nounits
-echo
-echo "2. Testing PCI device access:"
-docker exec kuzco-main cat /sys/bus/pci/devices/0000:01:00.0/vendor
-docker exec kuzco-main cat /sys/bus/pci/devices/0000:01:00.0/device
-echo
-echo "3. Testing system commands:"
-docker exec kuzco-main df -h
-echo
-echo "4. Testing nvidia-detector:"
-docker exec kuzco-main nvidia-detector
-EOF
-
-  chmod +x "$INSTALL_DIR"/*.sh
-  ok "Management scripts created"
-}
-
-main_menu(){
+menu(){
   while true; do
     header
     echo -e "${LINE}"
     echo -e "  ${GREEN}1.${RESET} Install & Run All Services"
     echo -e "  ${GREEN}2.${RESET} View Logs - Hyperbolic Server"
-    echo -e "  ${GREEN}3.${RESET} View Logs - Kuzco Worker" 
+    echo -e "  ${GREEN}3.${RESET} View Logs - Kuzco Worker"
     echo -e "  ${GREEN}4.${RESET} Stop All Services"
-    echo -e "  ${GREEN}5.${RESET} Check Status"
-    echo -e "  ${GREEN}6.${RESET} Test Complete Environment"
-    echo -e "  ${GREEN}7.${RESET} Reinstall All Services"
-    echo -e "  ${GREEN}8.${RESET} Quick Instructions"
-    echo -e "  ${GREEN}9.${RESET} Exit"
+    echo -e "  ${GREEN}5.${RESET} Restart All Services"
+    echo -e "  ${GREEN}6.${RESET} Check Status"
+    echo -e "  ${GREEN}7.${RESET} Change Model (Default: $DEFAULT_MODEL)"
+    echo -e "  ${GREEN}8.${RESET} Reconfigure API Key"
+    echo -e "  ${GREEN}9.${RESET} Add Extra Worker"
+    echo -e "  ${GREEN}0.${RESET} Uninstall All"
+    echo -e "  ${GREEN}q.${RESET} Quit"
     echo -e "${LINE}"
-    read -p "Select an option (1–9): " opt
-
+    read -p "Select an option: " opt
     case "$opt" in
-      1)
-        install_all
-        pause
-        ;;
-      2)
-        compose_logs_hyperbolic
-        ;;
-      3)
-        compose_logs_kuzco
-        ;;
-      4)
-        compose_down_hyperbolic
-        compose_down_kuzco
-        ok "All services stopped"
-        pause
-        ;;
-      5)
-        check_status
-        pause
-        ;;
-      6)
-        echo -e "${YELLOW}Testing Complete Fake Environment...${RESET}"
-        if [ -f "$INSTALL_DIR/test-environment.sh" ]; then
-          "$INSTALL_DIR/test-environment.sh"
-        else
-          docker exec kuzco-main nvidia-smi --query-gpu=uuid,driver_version,name,memory.total,pci.bus_id --format=csv,noheader,nounits
-        fi
-        pause
-        ;;
-      7)
-        compose_down_hyperbolic
-        compose_down_kuzco
-        rm -rf "$INSTALL_DIR"
-        ok "Reinstall ready. Select menu 1 to reinstall."
-        pause
-        ;;
-      8)
-        view_instructions
-        ;;
-      9)
-        echo -e "${CYAN}Thank you for using GoldVPS!${RESET}"
-        exit 0
-        ;;
-      *)
-        err "Invalid option. Choose 1–9."
-        sleep 1
-        ;;
+      1) install_all ;;
+      2) logs_hyperbolic ;;
+      3) logs_kuzco ;;
+      4) stop_all ;;
+      5) restart_all ;;
+      6) status_page; read -p "Enter untuk kembali..." _ ;;
+      7) change_model ;;
+      8) reconfig_keys ;;
+      9) add_worker ;;
+      0) uninstall_all ;;
+      q|Q) exit 0 ;;
+      *) warn "Pilihan tidak valid"; sleep 1 ;;
     esac
   done
 }
 
-# Check if running as root
-if [[ $EUID -ne 0 ]]; then
-   err "This script must be run as root!"
-   echo "Switch to root user: sudo su -"
-   exit 1
-fi
-
-# Main execution
-main_menu
+require_root
+menu
