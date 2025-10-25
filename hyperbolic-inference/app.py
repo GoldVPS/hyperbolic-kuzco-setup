@@ -1,173 +1,192 @@
+# app.py
 from flask import Flask, request, jsonify, Response
-import requests
+from flask_cors import CORS
 import os
 import json
-import sys
+import requests
 from datetime import datetime
 
 app = Flask(__name__)
+CORS(app)
 
-HYPERBOLIC_API_URL = os.getenv("HYPERBOLIC_API_URL", "https://api.hyperbolic.xyz/v1")
+# === ENV ===
+HYPERBOLIC_API_URL = os.getenv("HYPERBOLIC_API_URL", "https://api.hyperbolic.xyz/v1").rstrip("/")
 HYPERBOLIC_API_KEY = os.getenv("HYPERBOLIC_API_KEY", "")
-HYPERBOLIC_MODEL = os.getenv("HYPERBOLIC_MODEL", "meta-llama/Llama-3.2-3B-Instruct")
+HYPERBOLIC_MODEL   = os.getenv("HYPERBOLIC_MODEL", "meta-llama/Llama-3.2-3B-Instruct")
 
-# ---------- utils ----------
-def log(*args):
-    ts = datetime.utcnow().isoformat() + "Z"
-    print(f"[proxy] {ts}", *args, file=sys.stdout, flush=True)
+SESSION = requests.Session()
+DEFAULT_TIMEOUT = 60
 
-def hyper_headers():
+# === Helpers ===
+def _headers():
     return {
         "Authorization": f"Bearer {HYPERBOLIC_API_KEY}",
         "Content-Type": "application/json",
     }
 
-def convert_ollama_to_hyperbolic(ollama_data):
-    messages = []
-    if "prompt" in ollama_data:
-        messages.append({"role": "user", "content": ollama_data["prompt"]})
-    elif "messages" in ollama_data:
-        messages = ollama_data["messages"]
+def _ensure_messages(data: dict):
+    """Terima payload gaya Ollama (prompt) atau OpenAI (messages) lalu normalisasi ke OpenAI messages."""
+    if not isinstance(data, dict):
+        data = {}
+    if "messages" in data and isinstance(data["messages"], list):
+        msgs = data["messages"]
+    elif "prompt" in data:
+        p = data.get("prompt", "")
+        msgs = [{"role": "user", "content": p}]
+    else:
+        msgs = []
+    return msgs
+
+def _to_ollama_chat_response(content: str, model: str):
+    # Bentuk response ala `ollama /api/chat`
     return {
-        "model": HYPERBOLIC_MODEL,
-        "messages": messages,
-        "max_tokens": ollama_data.get("max_tokens", 512),
-        "temperature": ollama_data.get("temperature", 0.7),
-        "top_p": ollama_data.get("top_p", 0.9),
-        "stream": False,  # paksa non-stream agar gampang kompatibel
+        "model": model,
+        "created_at": datetime.utcnow().isoformat() + "Z",
+        "message": {"role": "assistant", "content": content},
+        "done": True
     }
 
-def convert_hyperbolic_to_ollama(hyperbolic_response, original_model_name=None):
-    try:
-        choices = hyperbolic_response.get("choices", [])
-        content = choices[0].get("message", {}).get("content", "") if choices else ""
-        return {
-            "model": original_model_name or HYPERBOLIC_MODEL,
-            "message": {"role": "assistant", "content": content},
-            "response": content,      # beberapa klien pakai field ini
-            "done": True,
-            "created_at": "",
-        }
-    except Exception as e:
-        return {
-            "model": original_model_name or HYPERBOLIC_MODEL,
-            "response": f"Error: {str(e)}",
-            "done": True,
-            "created_at": "",
-        }
+def _to_ollama_generate_response(content: str, model: str):
+    # Bentuk response ala `ollama /api/generate`
+    return {
+        "model": model,
+        "created_at": datetime.utcnow().isoformat() + "Z",
+        "response": content,
+        "done": True,
+        "context": [],
+        "total_duration": 0,
+        "load_duration": 0,
+        "prompt_eval_count": 0,
+        "prompt_eval_duration": 0,
+        "eval_count": 0,
+        "eval_duration": 0,
+    }
 
-# ---------- basic health ----------
+def _post_chat_completions(payload: dict):
+    # Paksa stream False supaya gampang diparse Kuzco
+    payload = dict(payload or {})
+    payload.setdefault("model", HYPERBOLIC_MODEL)
+    payload["stream"] = False
+
+    r = SESSION.post(
+        f"{HYPERBOLIC_API_URL}/chat/completions",
+        headers=_headers(),
+        json=payload,
+        timeout=DEFAULT_TIMEOUT,
+    )
+    return r
+
+# === Routes ===
+
+@app.route("/", methods=["GET"])
+def root():
+    return jsonify({"status": "ok", "service": "hyperbolic-ollama-compat", "model": HYPERBOLIC_MODEL})
+
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "healthy", "model": HYPERBOLIC_MODEL})
+    ok = bool(HYPERBOLIC_API_KEY)
+    return jsonify({"status": "healthy" if ok else "missing_api_key", "model": HYPERBOLIC_MODEL})
 
-# ---------- tags/models ----------
 @app.route("/api/tags", methods=["GET"])
 def list_models():
-    log("GET /api/tags")
+    # Format mirip ollama /api/tags agar discovery-nya lolos
+    model_name = HYPERBOLIC_MODEL
+    digest = model_name.replace("/", "-").lower()
     return jsonify({
         "models": [{
-            "name": HYPERBOLIC_MODEL,
-            "model": HYPERBOLIC_MODEL,
+            "name": model_name,
+            "model": model_name,
             "modified_at": "2024-01-01T00:00:00Z",
             "size": 3000000000,
-            "digest": "hyperbolic-llama3.2-3b",
+            "digest": f"hyperbolic-{digest}",
             "details": {"format": "gguf", "family": "llama", "parameter_size": "3B"}
         }]
     })
 
-# ---------- main chat (ollama-style compat) ----------
+# ---- OLLAMA COMPAT: /api/chat (chat) ----
 @app.route("/api/chat", methods=["POST"])
-def api_chat():
-    data = request.get_json(force=True, silent=True) or {}
-    log("POST /api/chat", f"keys={list(data.keys())}")
-    payload = {
-        "model": HYPERBOLIC_MODEL,
-        "messages": data.get("messages") or [{"role": "user", "content": data.get("prompt", "")}],
-        "max_tokens": data.get("max_tokens", 512),
-        "temperature": data.get("temperature", 0.7),
-        "top_p": data.get("top_p", 0.9),
-        "stream": False,
-        # map logprobs kalau ada supaya worker gak error walau Hyperbolic mungkin abaikan
-        "logprobs": data.get("logprobs", None),
-        "top_logprobs": data.get("top_logprobs", None),
-    }
-    r = requests.post(f"{HYPERBOLIC_API_URL}/chat/completions", headers=hyper_headers(), json=payload, timeout=60)
+def api_chat_compat():
     try:
+        data = request.get_json(force=True) or {}
+        messages = _ensure_messages(data)
+        payload = {
+            "model": HYPERBOLIC_MODEL,
+            "messages": messages,
+            "max_tokens": data.get("max_tokens", 512),
+            "temperature": data.get("temperature", 0.7),
+            "top_p": data.get("top_p", 0.9),
+            "stream": False,
+        }
+        r = _post_chat_completions(payload)
+        if not r.ok:
+            return Response(r.content, status=r.status_code,
+                            content_type=r.headers.get("content-type","application/json"))
         jr = r.json()
-    except Exception:
-        return Response(r.content, status=r.status_code, content_type=r.headers.get("content-type","application/json"))
-    return jsonify(convert_hyperbolic_to_ollama(jr, data.get("model"))), 200
+        content = (jr.get("choices") or [{}])[0].get("message", {}).get("content", "")
+        return jsonify(_to_ollama_chat_response(content, HYPERBOLIC_MODEL)), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-# ---------- openai-style passthrough ----------
-@app.route("/v1/chat/completions", methods=["POST"])
-def openai_chat_completions():
-    data = request.get_json(force=True, silent=True) or {}
-    log("POST /v1/chat/completions", f"keys={list(data.keys())}")
-    data["model"] = HYPERBOLIC_MODEL
-    r = requests.post(f"{HYPERBOLIC_API_URL}/chat/completions", headers=hyper_headers(), json=data, timeout=60)
-    return Response(r.content, status=r.status_code, content_type=r.headers.get('content-type', 'application/json'))
-
-# ---------- simple generate (compat lama) ----------
+# ---- OLLAMA COMPAT: /api/generate (text completion) ----
 @app.route("/api/generate", methods=["POST"])
-def generate():
-    ollama_data = request.get_json(force=True, silent=True) or {}
-    log("POST /api/generate", f"keys={list(ollama_data.keys())}")
-    hyperbolic_data = convert_ollama_to_hyperbolic(ollama_data)
-    r = requests.post(f"{HYPERBOLIC_API_URL}/chat/completions", json=hyperbolic_data, headers=hyper_headers(), timeout=60)
-    if r.status_code != 200:
-        return jsonify({"error": f"Hyperbolic API error: {r.status_code}", "body": r.text}), 500
-    return jsonify(convert_hyperbolic_to_ollama(r.json(), ollama_data.get("model"))), 200
+def api_generate_compat():
+    try:
+        data = request.get_json(force=True) or {}
+        messages = _ensure_messages(data)
+        payload = {
+            "model": HYPERBOLIC_MODEL,
+            "messages": messages,
+            "max_tokens": data.get("max_tokens", 512),
+            "temperature": data.get("temperature", 0.7),
+            "top_p": data.get("top_p", 0.9),
+            "stream": False,
+        }
+        r = _post_chat_completions(payload)
+        if not r.ok:
+            return Response(r.content, status=r.status_code,
+                            content_type=r.headers.get("content-type","application/json"))
+        jr = r.json()
+        content = (jr.get("choices") or [{}])[0].get("message", {}).get("content", "")
+        return jsonify(_to_ollama_generate_response(content, HYPERBOLIC_MODEL)), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-# ---------- extra compat endpoints that Kuzco sometimes hits ----------
-@app.route("/api/create", methods=["POST"])
-def api_create():
-    log("POST /api/create (noop)")
-    return jsonify({"status": "ok"}), 200
+# ---- OPENAI STYLE: pass-through (untuk tools lain yang nembak langsung) ----
+@app.route("/v1/chat/completions", methods=["POST"])
+def v1_chat_completions_passthrough():
+    try:
+        data = request.get_json(force=True) or {}
+        # Paksa model ke env supaya konsisten
+        data["model"] = HYPERBOLIC_MODEL
+        r = SESSION.post(
+            f"{HYPERBOLIC_API_URL}/chat/completions",
+            headers=_headers(),
+            json=data,
+            timeout=DEFAULT_TIMEOUT,
+        )
+        return Response(r.content, status=r.status_code,
+                        content_type=r.headers.get("content-type","application/json"))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-@app.route("/api/pull", methods=["POST"])
-def api_pull():
-    # Kuzco terkadang “pull model” kalau pakai sidecar; kita jawab sukses instan
-    body = request.get_json(force=True, silent=True) or {}
-    log("POST /api/pull", body.get("name"))
-    return jsonify({"status": "success", "model": body.get("name", HYPERBOLIC_MODEL)}), 200
+# (opsional) kompat route tanpa prefix api, sering kepakai saat uji manual
+@app.route("/chat/completions", methods=["POST"])
+def chat_completions_short():
+    try:
+        data = request.get_json(force=True) or {}
+        data["model"] = HYPERBOLIC_MODEL
+        r = SESSION.post(
+            f"{HYPERBOLIC_API_URL}/chat/completions",
+            headers=_headers(),
+            json=data,
+            timeout=DEFAULT_TIMEOUT,
+        )
+        return Response(r.content, status=r.status_code,
+                        content_type=r.headers.get("content-type","application/json"))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-@app.route("/api/show", methods=["POST"])
-def api_show():
-    body = request.get_json(force=True, silent=True) or {}
-    log("POST /api/show", body.get("name"))
-    return jsonify({"model": body.get("name", HYPERBOLIC_MODEL)}), 200
-
-@app.route("/api/ps", methods=["GET"])
-def api_ps():
-    log("GET /api/ps")
-    return jsonify({"models": [HYPERBOLIC_MODEL]}), 200
-
-@app.route("/api/embed", methods=["POST"])
-@app.route("/api/embeddings", methods=["POST"])
-def api_embeddings():
-    body = request.get_json(force=True, silent=True) or {}
-    log("POST", request.path, f"len_input={len((body.get('input') or ''))}")
-    # dummy vector to keep clients satisfied
-    return jsonify({"embeddings": [{"embedding": [0.0]*16, "index": 0}]}), 200
-
-@app.route("/api/version", methods=["GET"])
-def api_version():
-    log("GET /api/version")
-    return jsonify({"version": "ollama-compat-proxy-1.0"}), 200
-
-# ---------- safe fallback for any /api/*  ----------
-@app.route("/api/<path:anything>", methods=["GET","POST","PUT","DELETE","PATCH"])
-def api_fallback(anything):
-    log(f"{request.method} /api/{anything} -> fallback 200")
-    # supaya klien yang berharap JSON gak error
-    return jsonify({"status": "ok", "path": f"/api/{anything}"}), 200
-
-# ---------- root ----------
-@app.route("/", methods=["GET"])
-def root():
-    return jsonify({"ok": True, "service": "hyperbolic-ollama-compat-proxy", "model": HYPERBOLIC_MODEL}), 200
 
 if __name__ == "__main__":
-    # bind ke semua interface (container) port 11434
+    # Gunicorn disarankan di Docker, tapi ini biar bisa run lokal juga
     app.run(host="0.0.0.0", port=11434, debug=False)
