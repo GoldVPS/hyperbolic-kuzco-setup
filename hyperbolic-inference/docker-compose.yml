@@ -1,5 +1,4 @@
 version: '3.8'
-
 services:
   hyperbolic-inference:
     build: .
@@ -10,6 +9,13 @@ services:
       - HYPERBOLIC_API_URL=${HYPERBOLIC_API_URL:-https://api.hyperbolic.xyz/v1}
       - HYPERBOLIC_API_KEY=${HYPERBOLIC_API_KEY}
       - HYPERBOLIC_MODEL=${HYPERBOLIC_MODEL:-meta-llama/Llama-3.2-3B-Instruct}
+      - PYTHONUNBUFFERED=1
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:11434/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
     command: ["gunicorn",
               "-w","1",
               "-k","gthread","--threads","8",
