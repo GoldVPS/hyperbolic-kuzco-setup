@@ -16,3 +16,5 @@ services:
       OLLAMA_ORIGINS: "*"
       INFERENCE_ENGINE: "hyperbolic"
       CUDA_VISIBLE_DEVICES: "0"
+      - NODE_OPTIONS=--dns-result-order=ipv4first
+
