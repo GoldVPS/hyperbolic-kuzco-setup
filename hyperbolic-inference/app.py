@@ -2,6 +2,8 @@ from flask import Flask, request, jsonify, Response, stream_with_context
 import requests
 import os
 import json
+import time
+import uuid
 
 app = Flask(__name__)
 
@@ -30,6 +32,13 @@ def _hyperbolic_post_chat(payload: dict) -> requests.Response:
         timeout=DEFAULT_TIMEOUT,
     )
 
+def _extract_text_from_openai(resp_json: dict) -> str:
+    if isinstance(resp_json, dict):
+        ch = resp_json.get("choices", [])
+        if ch:
+            return ch[0].get("message", {}).get("content", "") or ""
+    return ""
+
 def convert_ollama_to_hyperbolic(ollama_data: dict) -> dict:
     """Map payload ala Ollama ke OpenAI-style untuk Hyperbolic."""
     if not isinstance(ollama_data, dict):
@@ -46,15 +55,14 @@ def convert_ollama_to_hyperbolic(ollama_data: dict) -> dict:
         "max_tokens": ollama_data.get("max_tokens", 512),
         "temperature": ollama_data.get("temperature", 0.7),
         "top_p": ollama_data.get("top_p", 0.9),
-        "stream": False,  # Hyperbolic non-stream; stream disimulasikan di /api/chat
+        "stream": False,  # Hyperbolic non-stream; stream disimulasikan saat perlu
     }
 
 def convert_hyperbolic_to_ollama(hyperbolic_response: dict, original_model_name: str = None) -> dict:
     """Map respons OpenAI-style ke format minimal /api/generate Ollama."""
     try:
         original_model_name = original_model_name or HYPERBOLIC_MODEL
-        choices = hyperbolic_response.get("choices", [])
-        content = choices[0].get("message", {}).get("content", "") if choices else ""
+        content = _extract_text_from_openai(hyperbolic_response)
         return {
             "model": original_model_name,
             "response": content,
@@ -70,6 +78,40 @@ def convert_hyperbolic_to_ollama(hyperbolic_response: dict, original_model_name:
     except Exception as e:
         return {"model": original_model_name or "unknown", "response": f"Error: {str(e)}", "done": True}
 
+def _sse_openai_chunks_from_text(text: str, model: str):
+    """Bentuk stream SSE ala OpenAI dari teks penuh (dengan logprobs placeholder)."""
+    chunk_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
+    parts = [p for p in (text or "").split("\n") if p.strip()] or [text or ""]
+    for p in parts:
+        event = {
+            "id": chunk_id,
+            "object": "chat.completion.chunk",
+            "created": int(time.time()),
+            "model": model,
+            "choices": [{
+                "index": 0,
+                "delta": {"role": "assistant", "content": p},
+                # placeholder agar klien yang akses `choices[0].logprobs` tidak error
+                "logprobs": {"content": []},
+                "finish_reason": None
+            }]
+        }
+        yield "data: " + json.dumps(event) + "\n\n"
+    final = {
+        "id": chunk_id,
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "delta": {},
+            "logprobs": None,
+            "finish_reason": "stop"
+        }]
+    }
+    yield "data: " + json.dumps(final) + "\n\n"
+    yield "data: [DONE]\n\n"
+
 # ======================
 # OLLAMA-COMPAT ROUTES
 # ======================
@@ -77,18 +119,18 @@ def convert_hyperbolic_to_ollama(hyperbolic_response: dict, original_model_name:
 @app.route('/api/tags', methods=['GET'])
 def list_models():
     """
-    Iklankan beberapa alias model supaya cocok dengan scheduler yang mencari variasi nama/precision.
+    Iklankan beberapa alias model (fp8/fp16 + generic) agar mudah match oleh scheduler.
     Semua alias tetap dipetakan ke HYPERBOLIC_MODEL saat infer.
     """
-    m = HYPERBOLIC_MODEL  # e.g. "meta-llama/Llama-3.2-3B-Instruct"
+    m = HYPERBOLIC_MODEL
     aliases = [
         # FP8 family
         "llama-3.2-3b-instruct/fp-8",
         "llama-3.2-3b-instruct/fp8",
-        # FP16 family (beberapa scheduler cari ini)
+        # FP16 family (beberapa pool cari ini)
         "llama-3.2-3b-instruct/fp-16",
         "llama-3.2-3b-instruct/fp16",
-        # generic
+        # generic names
         "llama-3.2-3b-instruct",
         "llama3.2-3b-instruct",
         m,
@@ -104,7 +146,6 @@ def list_models():
             "details": {
                 "format": "openai-proxy",
                 "family": "meta-llama",
-                # informasi ini tidak mengubah perilaku, hanya metadata
                 "parameter_size": "3B",
                 "precision": "fp8"
             }
@@ -127,8 +168,9 @@ def api_generate():
 @app.route('/api/chat', methods=['POST'])
 def api_chat():
     """
-    Endpoint chat kompatibel Ollama. Mendukung stream:true (SSE) dengan menyimulasikan stream
-    dari respons non-stream Hyperbolic.
+    Ollama-compatible chat.
+    - stream:false => balas gaya Ollama (message+done)
+    - stream:true  => SSE OpenAI-style (choices[0].delta + logprobs placeholder)
     """
     try:
         payload = request.get_json(force=True, silent=True) or {}
@@ -137,42 +179,29 @@ def api_chat():
         payload["model"] = HYPERBOLIC_MODEL
 
         want_stream = bool(payload.get("stream"))
-        payload["stream"] = False  # Hyperbolic: non-stream
+        hp_payload = dict(payload)
+        hp_payload["stream"] = False  # Hyperbolic: non-stream
 
-        r = _hyperbolic_post_chat(payload)
-        ct = r.headers.get("content-type", "")
-        data = r.json() if ct.startswith(JSON_CT) else {}
-        content = ""
-        if isinstance(data, dict):
-            ch = data.get("choices", [])
-            if ch:
-                content = ch[0].get("message", {}).get("content", "")
+        r = _hyperbolic_post_chat(hp_payload)
+        text = _extract_text_from_openai(r.json() if r.headers.get("content-type","").startswith(JSON_CT) else {})
 
         if not want_stream:
             return jsonify({
                 "model": HYPERBOLIC_MODEL,
                 "created_at": "",
-                "message": {"role": "assistant", "content": content},
+                "message": {"role": "assistant", "content": text},
                 "done": True,
             }), 200
 
-        # SSE streaming sederhana dari hasil full completion:
-        def gen():
-            text = content or ""
-            # pecah kasar per baris supaya ada beberapa event
-            parts = [p for p in text.split("\n") if p.strip()] or [text]
-            for p in parts:
-                yield "data: " + json.dumps({"message": {"role": "assistant", "content": p}, "done": False}) + "\n\n"
-            yield "data: " + json.dumps({"done": True}) + "\n\n"
-
-        return Response(stream_with_context(gen()), mimetype="text/event-stream")
+        return Response(stream_with_context(_sse_openai_chunks_from_text(text, HYPERBOLIC_MODEL)),
+                        mimetype="text/event-stream")
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/pull', methods=['POST'])
 def api_pull():
-    """Simulasikan sukses 'pull' model (karena kita tidak menyimpan model lokal)."""
+    """Simulasikan sukses 'pull' model (karena tidak menyimpan model lokal)."""
     body = request.get_json(force=True, silent=True) or {}
     name = body.get("name") or HYPERBOLIC_MODEL
     return jsonify({
@@ -205,16 +234,32 @@ def api_show():
     }), 200
 
 # ======================
-# OPENAI-COMPAT PASSTHROUGH
+# OPENAI-COMPAT PASSTHROUGH (+SSE synth)
 # ======================
 @app.route('/v1/chat/completions', methods=['POST'])
 def chat_completions():
-    """Passthrough OpenAI /v1/chat/completions → Hyperbolic /chat/completions."""
+    """
+    OpenAI-compatible.
+    - stream:false => passthrough response Hyperbolic
+    - stream:true  => sintetis SSE OpenAI-format (choices[0].delta & logprobs placeholder)
+    """
     try:
         data = request.get_json(force=True, silent=True) or {}
+        want_stream = bool(data.get("stream"))
         data["model"] = HYPERBOLIC_MODEL
-        r = _hyperbolic_post_chat(data)
-        return Response(r.content, status=r.status_code, content_type=r.headers.get('content-type', JSON_CT))
+
+        hp_payload = dict(data)
+        hp_payload["stream"] = False  # Hyperbolic non-stream
+        r = _hyperbolic_post_chat(hp_payload)
+
+        if not want_stream:
+            return Response(r.content, status=r.status_code,
+                            content_type=r.headers.get('content-type', JSON_CT))
+
+        text = _extract_text_from_openai(r.json() if r.headers.get("content-type","").startswith(JSON_CT) else {})
+        return Response(stream_with_context(_sse_openai_chunks_from_text(text, HYPERBOLIC_MODEL)),
+                        mimetype="text/event-stream")
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
