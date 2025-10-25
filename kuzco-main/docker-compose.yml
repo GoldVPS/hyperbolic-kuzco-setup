@@ -1,20 +1,21 @@
+# versi baris ini opsional (Compose v2+ mengabaikan), boleh dihapus
 version: "3.8"
+
 services:
   kuzco-main:
     build: .
     container_name: kuzco-main
-    network_mode: "host"
+    network_mode: host
     privileged: true
     restart: always
     security_opt:
       - apparmor:unconfined
     environment:
       NODE_ENV: "production"
-      CODE: "YOUR_WORKER_CODE"
-      WORKER_NAME: "YOUR_WORKER_NAME"
+      CODE: "YOUR_WORKER_CODE"            # <- ganti
+      WORKER_NAME: "YOUR_WORKER_NAME"     # <- ganti (stabil, jangan sering diubah)
       OLLAMA_HOST: "http://localhost:14444"
       OLLAMA_ORIGINS: "*"
       INFERENCE_ENGINE: "hyperbolic"
       CUDA_VISIBLE_DEVICES: "0"
-      - NODE_OPTIONS=--dns-result-order=ipv4first
-
+      NODE_OPTIONS: "--dns-result-order=ipv4first"   # <- ini yang tadi salah format
