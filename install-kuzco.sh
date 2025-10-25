@@ -20,24 +20,17 @@ pause(){ read -n 1 -s -r -p "Press any key to return to menu"; echo; }
 header(){
   clear
   echo -e "${LGOLD}"
-  echo " ██╗  ██╗██╗   ██╗██████╗ ███████╗██████╗  ██████╗ ██╗  ██╗"
-  echo " ██║  ██║██╗   ██║██╔══██╗██╔════╝██╔══██╗██╔═══██╗██║ ██╔╝"
-  echo " ███████║██║   ██║██████╔╝█████╗  ██████╔╝██║   ██║█████╔╝ "
-  echo " ██╔══██║██║   ██║██╔══██╗██╔══╝  ██╔══██╗██║   ██║██╔═██╗ "
-  echo " ██║  ██║╚██████╔╝██████╔╝███████╗██║  ██║╚██████╔╝██║  ██╗"
-  echo " ╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝"
-  echo "   ██╗  ██╗██╗   ██╗██████╗  ██████╗ ██████╗ "
-  echo "   ██║ ██╔╝██║   ██║██╔══██╗██╔═══██╗██╔══██╗"
-  echo "   █████╔╝ ██║   ██║██████╔╝██║   ██║██████╔╝"
-  echo "   ██╔═██╗ ██║   ██║██╔══██╗██║   ██║██╔══██╗"
-  echo "   ██║  ██╗╚██████╔╝██████╔╝╚██████╔╝██║  ██║"
-  echo "   ╚═╝  ╚═╝ ╚═════╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝"
-  echo -e "${NC}"
-  echo -e "🚀 ${LGOLD}Hyperbolic Kuzco Node Installer${NC} – Powered by ${LGOLD}GoldVPS Team${NC} 🚀"
-  echo -e "🌐 ${ULINE}https://goldvps.net${NC} – Best VPS with Low Price"
-  echo -e "🎮 ${YELLOW}With Complete Fake GPU & System Environment${NC}"
-  echo -e "👤 ${YELLOW}Running as: $(whoami)${NC}"
-  echo ""
+  echo -e "\e[38;5;220m"
+  echo " ██████╗  ██████╗ ██╗     ██████╗ ██╗   ██╗██████╗ ███████╗"
+  echo "██╔════╝ ██╔═══██╗██║     ██╔══██╗██║   ██║██╔══██╗██╔════╝"
+  echo "██║  ███╗██║   ██║██║     ██║  ██║██║   ██║██████╔╝███████╗"
+  echo "██║   ██║██║   ██║██║     ██║  ██║╚██╗ ██╔╝██╔═══╝ ╚════██║"
+  echo "╚██████╔╝╚██████╔╝███████╗██████╔╝ ╚████╔╝ ██║     ███████║"
+  echo " ╚═════╝  ╚═════╝ ╚══════╝╚═════╝   ╚═══╝  ╚═╝     ╚══════╝"
+  echo -e "\e[0m"
+  echo -e "🚀 \e[1;33mNexus Node Installer\e[0m - Powered by \e[1;33mGoldVPS Team\e[0m 🚀"
+  echo -e "🌐 \e[4;33mhttps://goldvps.net\e[0m - Best VPS with Low Price"
+  echo
 }
 
 install_docker(){
