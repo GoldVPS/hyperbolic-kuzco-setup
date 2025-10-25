@@ -28,7 +28,7 @@ header(){
   echo "╚██████╔╝╚██████╔╝███████╗██████╔╝ ╚████╔╝ ██║     ███████║"
   echo " ╚═════╝  ╚═════╝ ╚══════╝╚═════╝   ╚═══╝  ╚═╝     ╚══════╝"
   echo -e "\e[0m"
-  echo -e "🚀 \e[1;33mNexus Node Installer\e[0m - Powered by \e[1;33mGoldVPS Team\e[0m 🚀"
+  echo -e "🚀 \e[1;33mKuzco Without GPU Node Installer\e[0m - Powered by \e[1;33mGoldVPS Team\e[0m 🚀"
   echo -e "🌐 \e[4;33mhttps://goldvps.net\e[0m - Best VPS with Low Price"
   echo
 }
