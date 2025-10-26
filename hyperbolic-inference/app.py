@@ -17,8 +17,7 @@ MODEL_MAPPING = {
     "llama3.2:3b-instruct": "meta-llama/Llama-3.2-3B-Instruct",
     "llama3.2:3b": "meta-llama/Llama-3.2-3B-Instruct",
     "llama3.2": "meta-llama/Llama-3.2-3B-Instruct",
-    "llama3:8b": "meta-llama/Meta-Llama-3.1-8B-Instruct",
-    "llama3:70b": "meta-llama/Meta-Llama-3.1-70B-Instruct",
+    "llama-3.2-3b-instruct/fp-16": "meta-llama/Llama-3.2-3B-Instruct",
     # Default fallback
     "default": "meta-llama/Llama-3.2-3B-Instruct"
 }
@@ -64,13 +63,13 @@ def _to_hyperbolic_payload(messages, max_tokens=None, temperature=None, top_p=No
         payload["top_p"] = top_p
     return payload
 
-def _from_hyperbolic_to_ollama(h_resp, original_model=None):
+def _from_hyperbolic_to_ollama(h_resp, original_model=None, include_choices=True):
     content = ""
     choices = h_resp.get("choices") or []
     if choices:
         content = _safe_get(choices[0], "message", "content", default="") or ""
 
-    return {
+    response = {
         "model": original_model or HYPERBOLIC_MODEL,
         "created_at": _now_iso(),
         "message": {
@@ -86,6 +85,27 @@ def _from_hyperbolic_to_ollama(h_resp, original_model=None):
         "eval_count": 20,
         "eval_duration": 800000000
     }
+    
+    # Tambahkan field choices untuk kompatibilitas dengan Kuzco worker
+    if include_choices:
+        response["choices"] = [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": content
+                },
+                "logprobs": {
+                    "content": [],
+                    "token_logprobs": [],
+                    "tokens": [],
+                    "top_logprobs": []
+                },
+                "finish_reason": "stop"
+            }
+        ]
+    
+    return response
 
 def _ollama_options(body):
     opts = body.get("options") or {}
@@ -98,17 +118,6 @@ def _ollama_options(body):
 def _http_post_json(url, payload, timeout=60):
     r = SESSION.post(url, data=json.dumps(payload), timeout=timeout)
     return r
-
-def _http_post_json_stream(url, payload, timeout=60):
-    headers = {
-        "Authorization": f"Bearer {HYPERBOLIC_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    response = requests.post(url, json=payload, headers=headers, timeout=timeout, stream=True)
-    response.raise_for_status()
-    for line in response.iter_lines(decode_unicode=False):
-        if line:
-            yield line + b'\n'
 
 # ===================== Routes =====================
 
@@ -166,29 +175,27 @@ def api_generate():
             model=requested_model
         )
 
-        if stream:
-            response = _http_post_json_stream(f"{HYPERBOLIC_API_URL}/chat/completions", payload)
-            return Response(response, content_type='text/plain; charset=utf-8')
-        else:
-            r = _http_post_json(f"{HYPERBOLIC_API_URL}/chat/completions", payload)
-            if r.status_code != 200:
-                return jsonify({"error": f"Hyperbolic API error: {r.status_code}", "body": r.text}), 502
+        r = _http_post_json(f"{HYPERBOLIC_API_URL}/chat/completions", payload)
+        if r.status_code != 200:
+            return jsonify({"error": f"Hyperbolic API error: {r.status_code}", "body": r.text}), 502
 
-            out = _from_hyperbolic_to_ollama(r.json(), original_model=requested_model)
-            
-            return jsonify({
-                "model": out["model"],
-                "created_at": out["created_at"],
-                "response": out["message"]["content"],
-                "done": True,
-                "context": [],
-                "total_duration": out["total_duration"],
-                "load_duration": out["load_duration"],
-                "prompt_eval_count": out["prompt_eval_count"],
-                "prompt_eval_duration": out["prompt_eval_duration"],
-                "eval_count": out["eval_count"],
-                "eval_duration": out["eval_duration"]
-            })
+        out = _from_hyperbolic_to_ollama(r.json(), original_model=requested_model, include_choices=True)
+        
+        return jsonify({
+            "model": out["model"],
+            "created_at": out["created_at"],
+            "response": out["message"]["content"],
+            "done": True,
+            "context": [],
+            "total_duration": out["total_duration"],
+            "load_duration": out["load_duration"],
+            "prompt_eval_count": out["prompt_eval_count"],
+            "prompt_eval_duration": out["prompt_eval_duration"],
+            "eval_count": out["eval_count"],
+            "eval_duration": out["eval_duration"],
+            # Tambahkan field choices untuk Kuzco worker
+            "choices": out.get("choices", [])
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -217,16 +224,12 @@ def api_chat():
             model=requested_model
         )
 
-        if stream:
-            response = _http_post_json_stream(f"{HYPERBOLIC_API_URL}/chat/completions", payload)
-            return Response(response, content_type='text/plain; charset=utf-8')
-        else:
-            r = _http_post_json(f"{HYPERBOLIC_API_URL}/chat/completions", payload)
-            if r.status_code != 200:
-                return jsonify({"error": f"Hyperbolic API error: {r.status_code}", "body": r.text}), 502
+        r = _http_post_json(f"{HYPERBOLIC_API_URL}/chat/completions", payload)
+        if r.status_code != 200:
+            return jsonify({"error": f"Hyperbolic API error: {r.status_code}", "body": r.text}), 502
 
-            out = _from_hyperbolic_to_ollama(r.json(), original_model=requested_model)
-            return jsonify(out)
+        out = _from_hyperbolic_to_ollama(r.json(), original_model=requested_model, include_choices=True)
+        return jsonify(out)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -297,7 +300,8 @@ def api_blobs_get(digest):
     return jsonify({"status": "success"})
 
 @app.route("/v1/chat/completions", methods=["POST"])
-def v1_chat_completions_passthrough():
+def v1_chat_completions():
+    """OpenAI-compatible endpoint dengan fix untuk Kuzco worker"""
     try:
         data = request.get_json(force=True) or {}
         # Map model jika perlu
@@ -306,7 +310,35 @@ def v1_chat_completions_passthrough():
         data["model"] = hyperbolic_model
         
         r = _http_post_json(f"{HYPERBOLIC_API_URL}/chat/completions", data)
-        return Response(r.content, status=r.status_code, content_type=r.headers.get("content-type", "application/json"))
+        
+        if r.status_code != 200:
+            return jsonify({"error": f"Hyperbolic API error: {r.status_code}", "body": r.text}), 502
+            
+        response_data = r.json()
+        
+        # Pastikan response memiliki format yang diharapkan Kuzco worker
+        if "choices" not in response_data:
+            choices = response_data.get("choices", [])
+            if not choices:
+                choices = [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": response_data.get("choices", [{}])[0].get("message", {}).get("content", "") if response_data.get("choices") else ""
+                        },
+                        "logprobs": {
+                            "content": [],
+                            "token_logprobs": [],
+                            "tokens": [],
+                            "top_logprobs": []
+                        },
+                        "finish_reason": "stop"
+                    }
+                ]
+            response_data["choices"] = choices
+        
+        return jsonify(response_data)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
