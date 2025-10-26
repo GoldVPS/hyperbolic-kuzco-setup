@@ -11,7 +11,7 @@ services:
       NODE_ENV: "production"
       CODE: "YOUR_WORKER_CODE"
       WORKER_NAME: "YOUR_WORKER_NAME"
-      OLLAMA_HOST: "http://localhost:11434"    # make sure ini mengarah ke hyperbolic service
+      OLLAMA_HOST: "http://localhost:14444"    # make sure ini mengarah ke hyperbolic service
       OLLAMA_ORIGINS: "*"
       INFERENCE_ENGINE: "hyperbolic"
       CUDA_VISIBLE_DEVICES: "0"
