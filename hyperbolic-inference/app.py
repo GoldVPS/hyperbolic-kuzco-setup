@@ -33,7 +33,7 @@ def _to_hyperbolic_payload(messages, max_tokens=None, temperature=None, top_p=No
     payload = {
         "model": HYPERBOLIC_MODEL,
         "messages": messages or [],
-        "stream": False  # paksa non-stream demi stabilitas
+        "stream": stream
     }
     if max_tokens is not None:
         payload["max_tokens"] = max_tokens
@@ -59,30 +59,23 @@ def _from_hyperbolic_to_ollama(h_resp, original_model=None):
             "content": content
         },
         "done": True,
-        # Stub logprobs agar konsumen yang expect field ini tidak meledak
-        "logprobs": {
-            "content": [],
-            "token_logprobs": [],
-            "tokens": [],
-            "top_logprobs": []
-        }
+        "done_reason": "stop",
+        "total_duration": 0,
+        "load_duration": 0,
+        "prompt_eval_count": 0,
+        "prompt_eval_duration": 0,
+        "eval_count": 0,
+        "eval_duration": 0
     }
 
 def _ollama_options(body):
     """
     Ollama biasanya menaruh pengaturan di body.options
-    contoh:
-    {
-      "messages": [...],
-      "model": "llama2",
-      "stream": true,
-      "options": {"temperature": 0.7, "top_p": 0.9, "num_predict": 256}
-    }
     """
     opts = body.get("options") or {}
-    temperature = body.get("temperature", opts.get("temperature"))
-    top_p       = body.get("top_p", opts.get("top_p"))
-    max_tokens  = body.get("max_tokens", opts.get("num_predict"))
+    temperature = body.get("temperature", opts.get("temperature", 0.7))
+    top_p       = body.get("top_p", opts.get("top_p", 0.9))
+    max_tokens  = body.get("max_tokens", opts.get("num_predict", 512))
     stream      = body.get("stream", False)
     return max_tokens, temperature, top_p, stream
 
@@ -95,6 +88,10 @@ def _http_post_json(url, payload, timeout=60):
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "healthy", "model": HYPERBOLIC_MODEL})
+
+@app.route("/", methods=["GET"])
+def root():
+    return jsonify({"message": "Hyperbolic Inference Proxy", "status": "running"})
 
 @app.route("/api/tags", methods=["GET"])
 def api_tags():
@@ -115,7 +112,6 @@ def api_generate():
     """
     Endpoint kompatibel Ollama text completion:
     body: { "prompt": "...", "options": {...}, "model": "xxx", "stream": false }
-    Kita konversi ke OpenAI/Hyperbolic chat dengan 1 message user.
     """
     try:
         body = request.get_json(force=True) or {}
@@ -123,11 +119,11 @@ def api_generate():
         if not prompt:
             return jsonify({"error": "prompt is required"}), 400
 
-        max_tokens, temperature, top_p, _stream = _ollama_options(body)
+        max_tokens, temperature, top_p, stream = _ollama_options(body)
 
         messages = [{"role": "user", "content": prompt}]
         payload = _to_hyperbolic_payload(
-            messages, max_tokens=max_tokens, temperature=temperature, top_p=top_p, stream=False
+            messages, max_tokens=max_tokens, temperature=temperature, top_p=top_p, stream=stream
         )
 
         r = _http_post_json(f"{HYPERBOLIC_API_URL}/chat/completions", payload)
@@ -135,19 +131,20 @@ def api_generate():
             return jsonify({"error": f"Hyperbolic API error: {r.status_code}", "body": r.text}), 502
 
         out = _from_hyperbolic_to_ollama(r.json(), original_model=body.get("model") or HYPERBOLIC_MODEL)
-        # Bentuk response yang mirip /api/generate Ollama (minimal)
+        
+        # Response untuk /api/generate
         return jsonify({
             "model": out["model"],
             "created_at": out["created_at"],
             "response": out["message"]["content"],
             "done": True,
             "context": [],
-            "total_duration": 0,
-            "load_duration": 0,
-            "prompt_eval_count": 0,
-            "prompt_eval_duration": 0,
-            "eval_count": 0,
-            "eval_duration": 0
+            "total_duration": out["total_duration"],
+            "load_duration": out["load_duration"],
+            "prompt_eval_count": out["prompt_eval_count"],
+            "prompt_eval_duration": out["prompt_eval_duration"],
+            "eval_count": out["eval_count"],
+            "eval_duration": out["eval_duration"]
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -169,10 +166,10 @@ def api_chat():
         if not messages:
             return jsonify({"error": "messages or prompt is required"}), 400
 
-        max_tokens, temperature, top_p, _stream = _ollama_options(body)
+        max_tokens, temperature, top_p, stream = _ollama_options(body)
 
         payload = _to_hyperbolic_payload(
-            messages, max_tokens=max_tokens, temperature=temperature, top_p=top_p, stream=False
+            messages, max_tokens=max_tokens, temperature=temperature, top_p=top_p, stream=stream
         )
 
         r = _http_post_json(f"{HYPERBOLIC_API_URL}/chat/completions", payload)
@@ -184,11 +181,41 @@ def api_chat():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/api/show", methods=["POST"])
+def api_show():
+    """
+    Endpoint untuk show model info - diperlukan oleh Kuzco worker
+    """
+    body = request.get_json(force=True) or {}
+    model = body.get("model") or HYPERBOLIC_MODEL
+    
+    return jsonify({
+        "modelfile": f"""
+FROM {model}
+TEMPLATE '''[INST] {{ if .System }}<<SYS>>{{ .System }}<</SYS>>
+
+{{ end }}{{ .Prompt }} [/INST]'''
+SYSTEM \"\"\"You are a helpful assistant.\"\"\"
+PARAMETER temperature 0.7
+PARAMETER top_p 0.9
+        """.strip(),
+        "parameters": {
+            "temperature": "0.7",
+            "top_p": "0.9"
+        },
+        "template": "[INST] {{ if .System }}<<SYS>>{{ .System }}<</SYS>>\n\n{{ end }}{{ .Prompt }} [/INST]",
+        "details": {
+            "format": "gguf",
+            "family": "llama",
+            "parameter_size": "3B",
+            "quantization_level": "Q4_0"
+        }
+    })
+
 @app.route("/v1/chat/completions", methods=["POST"])
 def v1_chat_completions_passthrough():
     """
     Passthrough OpenAI-compatible -> Hyperbolic.
-    Kita inject model default kalau tidak ada.
     """
     try:
         data = request.get_json(force=True) or {}
@@ -198,7 +225,13 @@ def v1_chat_completions_passthrough():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# Catch-all untuk route yang tidak ditemukan
+@app.errorhandler(404)
+def not_found(e):
+    return jsonify({"error": "Endpoint not found", "available_endpoints": [
+        "/health", "/api/tags", "/api/chat", "/api/generate", "/api/show", "/v1/chat/completions"
+    ]}), 404
+
 # ===================== Main =====================
 if __name__ == "__main__":
-    # Untuk debugging lokal (tidak dipakai saat run via gunicorn)
     app.run(host="0.0.0.0", port=11434, debug=False)
