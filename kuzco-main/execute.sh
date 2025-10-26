@@ -156,7 +156,7 @@ while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
             # Test show endpoint
             if curl -fsS -X POST "${OLLAMA_HOST}/api/show" \
                -H "Content-Type: application/json" \
-               -d '{"name":"meta-llama/Llama-3.2-3B-Instruct"}' >/dev/null 2>&1; then
+               -d '{"name":"llama3.2:3b-instruct-fp16"}' >/dev/null 2>&1; then
                 echo "✅ Show endpoint ready"
                 break
             else
