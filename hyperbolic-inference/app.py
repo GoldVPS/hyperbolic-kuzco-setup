@@ -44,13 +44,11 @@ def _to_hyperbolic_payload(messages, max_tokens=None, temperature=None, top_p=No
     return payload
 
 def _from_hyperbolic_to_ollama(h_resp, original_model=None):
-    # Ambil teks jawaban
     content = ""
     choices = h_resp.get("choices") or []
     if choices:
         content = _safe_get(choices[0], "message", "content", default="") or ""
 
-    # Format mirip Ollama /api/chat
     return {
         "model": original_model or HYPERBOLIC_MODEL,
         "created_at": _now_iso(),
@@ -60,18 +58,15 @@ def _from_hyperbolic_to_ollama(h_resp, original_model=None):
         },
         "done": True,
         "done_reason": "stop",
-        "total_duration": 0,
-        "load_duration": 0,
-        "prompt_eval_count": 0,
-        "prompt_eval_duration": 0,
-        "eval_count": 0,
-        "eval_duration": 0
+        "total_duration": 1000000000,
+        "load_duration": 100000000,
+        "prompt_eval_count": 10,
+        "prompt_eval_duration": 50000000,
+        "eval_count": 20,
+        "eval_duration": 800000000
     }
 
 def _ollama_options(body):
-    """
-    Ollama biasanya menaruh pengaturan di body.options
-    """
     opts = body.get("options") or {}
     temperature = body.get("temperature", opts.get("temperature", 0.7))
     top_p       = body.get("top_p", opts.get("top_p", 0.9))
@@ -93,9 +88,13 @@ def health():
 def root():
     return jsonify({"message": "Hyperbolic Inference Proxy", "status": "running"})
 
+@app.route("/api/version", methods=["GET"])
+def api_version():
+    """Endpoint untuk version info"""
+    return jsonify({"version": "0.1.0"})
+
 @app.route("/api/tags", methods=["GET"])
 def api_tags():
-    # Mirip Ollama /api/tags
     return jsonify({
         "models": [{
             "name": HYPERBOLIC_MODEL,
@@ -109,10 +108,6 @@ def api_tags():
 
 @app.route("/api/generate", methods=["POST"])
 def api_generate():
-    """
-    Endpoint kompatibel Ollama text completion:
-    body: { "prompt": "...", "options": {...}, "model": "xxx", "stream": false }
-    """
     try:
         body = request.get_json(force=True) or {}
         prompt = body.get("prompt", "")
@@ -132,7 +127,6 @@ def api_generate():
 
         out = _from_hyperbolic_to_ollama(r.json(), original_model=body.get("model") or HYPERBOLIC_MODEL)
         
-        # Response untuk /api/generate
         return jsonify({
             "model": out["model"],
             "created_at": out["created_at"],
@@ -151,15 +145,10 @@ def api_generate():
 
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
-    """
-    Endpoint kompatibel Ollama chat:
-    body: { "messages":[...], "model": "...", "options": {...}, "stream": true|false }
-    """
     try:
         body = request.get_json(force=True) or {}
 
         messages = body.get("messages")
-        # fallback jika ada "prompt"
         if not messages and "prompt" in body:
             messages = [{"role": "user", "content": body.get("prompt", "")}]
 
@@ -183,11 +172,9 @@ def api_chat():
 
 @app.route("/api/show", methods=["POST"])
 def api_show():
-    """
-    Endpoint untuk show model info - diperlukan oleh Kuzco worker
-    """
+    """Endpoint untuk show model info - diperlukan oleh Kuzco worker"""
     body = request.get_json(force=True) or {}
-    model = body.get("model") or HYPERBOLIC_MODEL
+    model = body.get("name") or HYPERBOLIC_MODEL
     
     return jsonify({
         "modelfile": f"""
@@ -212,11 +199,52 @@ PARAMETER top_p 0.9
         }
     })
 
+@app.route("/api/ps", methods=["GET", "POST"])
+def api_ps():
+    """Endpoint untuk process status"""
+    return jsonify({"models": [
+        {
+            "name": HYPERBOLIC_MODEL,
+            "model": HYPERBOLIC_MODEL,
+            "size": 3000000000,
+            "digest": "hyperbolic-llama3.2-3b",
+            "details": {"parent_model": "", "format": "gguf", "family": "llama", "parameter_size": "3B"},
+            "expires_at": "2024-12-31T23:59:59Z",
+            "size_vram": 1500000000
+        }
+    ]})
+
+@app.route("/api/copy", methods=["POST"])
+def api_copy():
+    """Endpoint untuk copy model"""
+    return jsonify({"status": "success"})
+
+@app.route("/api/delete", methods=["DELETE"])
+def api_delete():
+    """Endpoint untuk delete model"""
+    return jsonify({"status": "success"})
+
+@app.route("/api/pull", methods=["POST"])
+def api_pull():
+    """Endpoint untuk pull model"""
+    body = request.get_json(force=True) or {}
+    model = body.get("name") or HYPERBOLIC_MODEL
+    
+    # Simulate pull progress
+    return jsonify({"status": "success"})
+
+@app.route("/api/blobs/<digest>", methods=["HEAD"])
+def api_blobs_head(digest):
+    """Endpoint untuk blob check"""
+    return Response(status=200)
+
+@app.route("/api/blobs/<digest>", methods=["GET"])
+def api_blobs_get(digest):
+    """Endpoint untuk get blob"""
+    return jsonify({"status": "success"})
+
 @app.route("/v1/chat/completions", methods=["POST"])
 def v1_chat_completions_passthrough():
-    """
-    Passthrough OpenAI-compatible -> Hyperbolic.
-    """
     try:
         data = request.get_json(force=True) or {}
         data["model"] = data.get("model") or HYPERBOLIC_MODEL
@@ -225,12 +253,29 @@ def v1_chat_completions_passthrough():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# CORS handling
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    return response
+
+@app.route('/', methods=['OPTIONS'])
+@app.route('/<path:path>', methods=['OPTIONS'])
+def options_handler(path=None):
+    return Response(status=200)
+
 # Catch-all untuk route yang tidak ditemukan
 @app.errorhandler(404)
 def not_found(e):
-    return jsonify({"error": "Endpoint not found", "available_endpoints": [
-        "/health", "/api/tags", "/api/chat", "/api/generate", "/api/show", "/v1/chat/completions"
-    ]}), 404
+    return jsonify({
+        "error": "Endpoint not found", 
+        "available_endpoints": [
+            "/health", "/api/version", "/api/tags", "/api/chat", "/api/generate", 
+            "/api/show", "/api/ps", "/api/pull", "/v1/chat/completions"
+        ]
+    }), 404
 
 # ===================== Main =====================
 if __name__ == "__main__":
