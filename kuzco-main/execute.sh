@@ -191,9 +191,30 @@ echo "Health:"; curl -s "${OLLAMA_HOST}/health" | head -c 100; echo "..."
 echo "Tags:"; curl -s "${OLLAMA_HOST}/api/tags" | head -c 100; echo "..."
 echo "Version:"; curl -s "${OLLAMA_HOST}/api/version" | head -c 100; echo "..."
 
-# =========[ Start node ]=========
+# =========[ Network connectivity check to inference.net ]=========
+echo "🌐 Testing connectivity to inference.net..."
+if curl -fsS --connect-timeout 10 https://devnet.inference.net >/dev/null 2>&1; then
+    echo "✅ Connectivity to inference.net: OK"
+else
+    echo "❌ Cannot reach inference.net - check network/firewall"
+    echo "Trying with verbose output:"
+    curl -v --connect-timeout 10 https://devnet.inference.net || true
+fi
+
+# =========[ Start node dengan error handling ]=========
 echo "Starting Kuzco worker with Hyperbolic inference..."
 echo "Using OLLAMA_HOST: $OLLAMA_HOST"
 echo "Using CODE: $CODE"
+echo "Using WORKER_NAME: $WORKER_NAME"
+
+# Add timeout untuk mencegah hanging
+timeout 30s bash -c "
+    if curl -fsS https://nc.devnet.inference.net:4222 >/dev/null 2>&1; then
+        echo '✅ NATS server is reachable'
+    else
+        echo '❌ Cannot reach NATS server'
+        exit 1
+    fi
+" || echo "⚠️ NATS connectivity check timeout"
 
 exec inference node start --code "$CODE"
