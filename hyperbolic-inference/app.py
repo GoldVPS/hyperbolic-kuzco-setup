@@ -11,6 +11,18 @@ HYPERBOLIC_API_URL = os.getenv("HYPERBOLIC_API_URL", "https://api.hyperbolic.xyz
 HYPERBOLIC_API_KEY = os.getenv("HYPERBOLIC_API_KEY", "")
 HYPERBOLIC_MODEL   = os.getenv("HYPERBOLIC_MODEL", "meta-llama/Llama-3.2-3B-Instruct")
 
+# Model mapping dari Ollama ke Hyperbolic
+MODEL_MAPPING = {
+    "llama3.2:3b-instruct-fp16": "meta-llama/Llama-3.2-3B-Instruct",
+    "llama3.2:3b-instruct": "meta-llama/Llama-3.2-3B-Instruct",
+    "llama3.2:3b": "meta-llama/Llama-3.2-3B-Instruct",
+    "llama3.2": "meta-llama/Llama-3.2-3B-Instruct",
+    "llama3:8b": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+    "llama3:70b": "meta-llama/Meta-Llama-3.1-70B-Instruct",
+    # Default fallback
+    "default": "meta-llama/Llama-3.2-3B-Instruct"
+}
+
 SESSION = requests.Session()
 SESSION.headers.update({
     "Authorization": f"Bearer {HYPERBOLIC_API_KEY}",
@@ -29,9 +41,18 @@ def _safe_get(d, *path, default=None):
         cur = cur[k]
     return cur
 
-def _to_hyperbolic_payload(messages, max_tokens=None, temperature=None, top_p=None, stream=False):
+def _map_model(ollama_model):
+    """Map Ollama model names to Hyperbolic model names"""
+    if ollama_model in MODEL_MAPPING:
+        return MODEL_MAPPING[ollama_model]
+    return MODEL_MAPPING["default"]
+
+def _to_hyperbolic_payload(messages, max_tokens=None, temperature=None, top_p=None, stream=False, model=None):
+    # Gunakan model yang dimapping atau default
+    hyperbolic_model = _map_model(model) if model else HYPERBOLIC_MODEL
+    
     payload = {
-        "model": HYPERBOLIC_MODEL,
+        "model": hyperbolic_model,
         "messages": messages or [],
         "stream": stream
     }
@@ -86,25 +107,32 @@ def health():
 
 @app.route("/", methods=["GET"])
 def root():
-    return jsonify({"message": "Hyperbolic Inference Proxy", "status": "running"})
+    return jsonify({
+        "message": "Hyperbolic Inference Proxy", 
+        "status": "running",
+        "supported_models": list(MODEL_MAPPING.values())
+    })
 
 @app.route("/api/version", methods=["GET"])
 def api_version():
-    """Endpoint untuk version info"""
     return jsonify({"version": "0.1.0"})
 
 @app.route("/api/tags", methods=["GET"])
 def api_tags():
-    return jsonify({
-        "models": [{
-            "name": HYPERBOLIC_MODEL,
-            "model": HYPERBOLIC_MODEL,
-            "modified_at": "2024-01-01T00:00:00Z",
-            "size": 3000000000,
-            "digest": "hyperbolic-llama3.2-3b",
-            "details": {"format": "gguf", "family": "llama", "parameter_size": "3B"}
-        }]
-    })
+    # Return semua model yang didukung (dalam format Ollama)
+    ollama_models = []
+    for ollama_name, hyperbolic_name in MODEL_MAPPING.items():
+        if ollama_name != "default":
+            ollama_models.append({
+                "name": ollama_name,
+                "model": hyperbolic_name,
+                "modified_at": "2024-01-01T00:00:00Z",
+                "size": 3000000000,
+                "digest": f"hyperbolic-{hyperbolic_name.replace('/', '-').lower()}",
+                "details": {"format": "gguf", "family": "llama", "parameter_size": "3B"}
+            })
+    
+    return jsonify({"models": ollama_models})
 
 @app.route("/api/generate", methods=["POST"])
 def api_generate():
@@ -115,17 +143,23 @@ def api_generate():
             return jsonify({"error": "prompt is required"}), 400
 
         max_tokens, temperature, top_p, stream = _ollama_options(body)
+        requested_model = body.get("model", "llama3.2:3b-instruct-fp16")
 
         messages = [{"role": "user", "content": prompt}]
         payload = _to_hyperbolic_payload(
-            messages, max_tokens=max_tokens, temperature=temperature, top_p=top_p, stream=stream
+            messages, 
+            max_tokens=max_tokens, 
+            temperature=temperature, 
+            top_p=top_p, 
+            stream=stream,
+            model=requested_model
         )
 
         r = _http_post_json(f"{HYPERBOLIC_API_URL}/chat/completions", payload)
         if r.status_code != 200:
             return jsonify({"error": f"Hyperbolic API error: {r.status_code}", "body": r.text}), 502
 
-        out = _from_hyperbolic_to_ollama(r.json(), original_model=body.get("model") or HYPERBOLIC_MODEL)
+        out = _from_hyperbolic_to_ollama(r.json(), original_model=requested_model)
         
         return jsonify({
             "model": out["model"],
@@ -147,6 +181,7 @@ def api_generate():
 def api_chat():
     try:
         body = request.get_json(force=True) or {}
+        requested_model = body.get("model", "llama3.2:3b-instruct-fp16")
 
         messages = body.get("messages")
         if not messages and "prompt" in body:
@@ -158,27 +193,32 @@ def api_chat():
         max_tokens, temperature, top_p, stream = _ollama_options(body)
 
         payload = _to_hyperbolic_payload(
-            messages, max_tokens=max_tokens, temperature=temperature, top_p=top_p, stream=stream
+            messages, 
+            max_tokens=max_tokens, 
+            temperature=temperature, 
+            top_p=top_p, 
+            stream=stream,
+            model=requested_model
         )
 
         r = _http_post_json(f"{HYPERBOLIC_API_URL}/chat/completions", payload)
         if r.status_code != 200:
             return jsonify({"error": f"Hyperbolic API error: {r.status_code}", "body": r.text}), 502
 
-        out = _from_hyperbolic_to_ollama(r.json(), original_model=body.get("model") or HYPERBOLIC_MODEL)
+        out = _from_hyperbolic_to_ollama(r.json(), original_model=requested_model)
         return jsonify(out)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route("/api/show", methods=["POST"])
 def api_show():
-    """Endpoint untuk show model info - diperlukan oleh Kuzco worker"""
     body = request.get_json(force=True) or {}
-    model = body.get("name") or HYPERBOLIC_MODEL
+    model = body.get("name", "llama3.2:3b-instruct-fp16")
+    hyperbolic_model = _map_model(model)
     
     return jsonify({
         "modelfile": f"""
-FROM {model}
+FROM {hyperbolic_model}
 TEMPLATE '''[INST] {{ if .System }}<<SYS>>{{ .System }}<</SYS>>
 
 {{ end }}{{ .Prompt }} [/INST]'''
@@ -201,11 +241,10 @@ PARAMETER top_p 0.9
 
 @app.route("/api/ps", methods=["GET", "POST"])
 def api_ps():
-    """Endpoint untuk process status"""
     return jsonify({"models": [
         {
-            "name": HYPERBOLIC_MODEL,
-            "model": HYPERBOLIC_MODEL,
+            "name": "llama3.2:3b-instruct-fp16",
+            "model": "meta-llama/Llama-3.2-3B-Instruct",
             "size": 3000000000,
             "digest": "hyperbolic-llama3.2-3b",
             "details": {"parent_model": "", "format": "gguf", "family": "llama", "parameter_size": "3B"},
@@ -216,38 +255,36 @@ def api_ps():
 
 @app.route("/api/copy", methods=["POST"])
 def api_copy():
-    """Endpoint untuk copy model"""
     return jsonify({"status": "success"})
 
 @app.route("/api/delete", methods=["DELETE"])
 def api_delete():
-    """Endpoint untuk delete model"""
     return jsonify({"status": "success"})
 
 @app.route("/api/pull", methods=["POST"])
 def api_pull():
-    """Endpoint untuk pull model"""
     body = request.get_json(force=True) or {}
-    model = body.get("name") or HYPERBOLIC_MODEL
+    model = body.get("name") or "llama3.2:3b-instruct-fp16"
     
-    # Simulate pull progress
     return jsonify({"status": "success"})
 
 @app.route("/api/blobs/<digest>", methods=["HEAD"])
 def api_blobs_head(digest):
-    """Endpoint untuk blob check"""
     return Response(status=200)
 
 @app.route("/api/blobs/<digest>", methods=["GET"])
 def api_blobs_get(digest):
-    """Endpoint untuk get blob"""
     return jsonify({"status": "success"})
 
 @app.route("/v1/chat/completions", methods=["POST"])
 def v1_chat_completions_passthrough():
     try:
         data = request.get_json(force=True) or {}
-        data["model"] = data.get("model") or HYPERBOLIC_MODEL
+        # Map model jika perlu
+        requested_model = data.get("model", "llama3.2:3b-instruct-fp16")
+        hyperbolic_model = _map_model(requested_model)
+        data["model"] = hyperbolic_model
+        
         r = _http_post_json(f"{HYPERBOLIC_API_URL}/chat/completions", data)
         return Response(r.content, status=r.status_code, content_type=r.headers.get("content-type", "application/json"))
     except Exception as e:
