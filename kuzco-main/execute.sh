@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-trap 'echo "Stopping..."; exit 0' INT TERM
+trap 'echo "Stopping Kuzco worker..."; exit 0' INT TERM
 
 echo "Setting up complete fake environment for Kuzco..."
 
@@ -16,8 +16,12 @@ FAKE_UUID_FILE="$FAKE_DIR/fake_gpu_uuid"
 FAKE_BUSID_FILE="$FAKE_DIR/fake_pci_busid"
 
 # generate sekali lalu dipakai terus (unik antar VPS, stabil di VPS ini)
-if [ ! -s "$FAKE_UUID_FILE" ]; then uuidgen | sed 's/^/GPU-/' > "$FAKE_UUID_FILE"; fi
-if [ ! -s "$FAKE_BUSID_FILE" ]; then printf "00000000:%02x:00.0\n" $(( (RANDOM % 14) + 1 )) > "$FAKE_BUSID_FILE"; fi
+if [ ! -s "$FAKE_UUID_FILE" ]; then 
+    uuidgen | sed 's/^/GPU-/' > "$FAKE_UUID_FILE"
+fi
+if [ ! -s "$FAKE_BUSID_FILE" ]; then 
+    printf "00000000:%02x:00.0\n" $(( (RANDOM % 14) + 1 )) > "$FAKE_BUSID_FILE"
+fi
 
 FAKE_UUID="$(cat "$FAKE_UUID_FILE")"
 FAKE_BUSID="$(cat "$FAKE_BUSID_FILE")"
@@ -111,15 +115,67 @@ echo "4. Testing fuser:"
 # =========[ Force Hyperbolic proxy (alias OLLAMA) & readiness check ]=========
 export OLLAMA_HOST="${OLLAMA_HOST:-http://localhost:14444}"
 export OLLAMA_ORIGINS="*"
+export NODE_OPTIONS="--dns-result-order=ipv4first"
 
-echo "Waiting Hyperbolic proxy on $OLLAMA_HOST ..."
-# butuh /health DAN /api/tags siap supaya awal tidak 404
-until curl -fsS "$OLLAMA_HOST/health" >/dev/null 2>&1 \
-   && curl -fsS "$OLLAMA_HOST/api/tags" >/dev/null 2>&1; do
-  sleep 1
+echo "Waiting for Hyperbolic proxy on $OLLAMA_HOST ..."
+
+# Test koneksi ke Hyperbolic proxy dengan timeout lebih panjang
+MAX_RETRIES=60
+RETRY_COUNT=0
+
+while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+    echo "Testing connection to Hyperbolic proxy (attempt $((RETRY_COUNT + 1))/$MAX_RETRIES)..."
+    
+    # Test basic connectivity
+    if curl -fsS "${OLLAMA_HOST}/health" >/dev/null 2>&1; then
+        echo "✅ Health check passed"
+        
+        # Test API endpoints
+        if curl -fsS "${OLLAMA_HOST}/api/tags" >/dev/null 2>&1; then
+            echo "✅ API tags endpoint ready"
+            
+            # Test chat endpoint dengan request sederhana
+            if curl -fsS -X POST "${OLLAMA_HOST}/api/chat" \
+               -H "Content-Type: application/json" \
+               -d '{"messages":[{"role":"user","content":"hello"}],"stream":false}' >/dev/null 2>&1; then
+                echo "✅ Chat endpoint ready"
+                break
+            else
+                echo "⚠️  Chat endpoint not ready yet"
+            fi
+        else
+            echo "⚠️  API tags not ready yet"
+        fi
+    else
+        echo "⚠️  Health check not ready yet"
+    fi
+    
+    RETRY_COUNT=$((RETRY_COUNT + 1))
+    sleep 2
 done
-echo "✅ Hyperbolic proxy ready!"
+
+if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+    echo "❌ Hyperbolic proxy not fully ready after $MAX_RETRIES attempts"
+    echo "Testing individual endpoints:"
+    curl -v "${OLLAMA_HOST}/health" || true
+    echo "---"
+    curl -v "${OLLAMA_HOST}/api/tags" || true
+    echo "---"
+    exit 1
+fi
+
+echo "✅ Hyperbolic proxy fully ready!"
+
+# =========[ Final test sebelum start ]=========
+echo "Running final connectivity test..."
+curl -fsS "${OLLAMA_HOST}/health" | head -c 100
+echo "..."
+curl -fsS "${OLLAMA_HOST}/api/tags" | head -c 100
+echo "..."
 
 # =========[ Start node ]=========
 echo "Starting Kuzco worker with Hyperbolic inference..."
+echo "Using OLLAMA_HOST: $OLLAMA_HOST"
+echo "Using CODE: $CODE"
+
 exec inference node start --code "$CODE"
