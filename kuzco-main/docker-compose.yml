@@ -2,7 +2,7 @@ services:
   kuzco-main:
     build: .
     container_name: kuzco-main
-    network_mode: "host"     # atau gunakan bridge jika tidak butuh host mode
+    network_mode: host     # atau gunakan bridge jika tidak butuh host mode
     privileged: true
     restart: always
     security_opt:
