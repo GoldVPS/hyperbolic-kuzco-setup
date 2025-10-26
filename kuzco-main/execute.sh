@@ -95,6 +95,17 @@ fi
 FUSER
 chmod +x /usr/local/bin/fuser
 
+# =========[ Fake PCI devices ]=========
+mkdir -p /sys/bus/pci/devices/0000:01:00.0 2>/dev/null || true
+echo "0x10de" > /sys/bus/pci/devices/0000:01:00.0/vendor 2>/dev/null || true
+echo "0x2684" > /sys/bus/pci/devices/0000:01:00.0/device 2>/dev/null || true
+
+# =========[ Fake /dev/nvidia* ]=========
+mkdir -p /dev
+[ -c /dev/nvidia0 ] || mknod /dev/nvidia0 c 195 0 2>/dev/null || true
+[ -c /dev/nvidiactl ] || mknod /dev/nvidiactl c 195 255 2>/dev/null || true
+[ -c /dev/nvidia-modeset ] || mknod /dev/nvidia-modeset c 195 254 2>/dev/null || true
+
 echo "✅ Complete fake environment setup complete"
 
 # =========[ Setup GPU dummy ]=========
@@ -105,11 +116,14 @@ echo "Setting up fake GPU..."
 echo "Testing all Kuzco system commands..."
 echo "1. Testing nvidia-smi query:"
 /usr/local/bin/nvidia-smi --query-gpu=uuid,driver_version,name,memory.total,pci.bus_id --format=csv,noheader,nounits || true
-echo "2. Testing df:"
+echo "2. Testing PCI device files:"
+cat /sys/bus/pci/devices/0000:01:00.0/vendor 2>/dev/null || echo "PCI vendor: 0x10de (fake)"
+cat /sys/bus/pci/devices/0000:01:00.0/device 2>/dev/null || echo "PCI device: 0x2684 (fake)"
+echo "3. Testing df:"
 df -h || true
-echo "3. Testing lsof:"
+echo "4. Testing lsof:"
 /usr/local/bin/lsof -ti :8084 || true
-echo "4. Testing fuser:"
+echo "5. Testing fuser:"
 /usr/local/bin/fuser -v /dev/nvidia0 || true
 
 # =========[ Force Hyperbolic proxy (alias OLLAMA) & readiness check ]=========
@@ -120,34 +134,39 @@ export NODE_OPTIONS="--dns-result-order=ipv4first"
 echo "Waiting for Hyperbolic proxy on $OLLAMA_HOST ..."
 
 # Test koneksi ke Hyperbolic proxy dengan timeout lebih panjang
-MAX_RETRIES=60
+MAX_RETRIES=30
 RETRY_COUNT=0
 
 while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
     echo "Testing connection to Hyperbolic proxy (attempt $((RETRY_COUNT + 1))/$MAX_RETRIES)..."
     
-    # Test basic connectivity
-    if curl -fsS "${OLLAMA_HOST}/health" >/dev/null 2>&1; then
-        echo "✅ Health check passed"
+    # Test semua endpoint yang diperlukan
+    if curl -fsS "${OLLAMA_HOST}/health" >/dev/null 2>&1 && \
+       curl -fsS "${OLLAMA_HOST}/api/tags" >/dev/null 2>&1 && \
+       curl -fsS "${OLLAMA_HOST}/api/version" >/dev/null 2>&1; then
         
-        # Test API endpoints
-        if curl -fsS "${OLLAMA_HOST}/api/tags" >/dev/null 2>&1; then
-            echo "✅ API tags endpoint ready"
+        echo "✅ Basic endpoints ready"
+        
+        # Test chat endpoint dengan request sederhana
+        if curl -fsS -X POST "${OLLAMA_HOST}/api/chat" \
+           -H "Content-Type: application/json" \
+           -d '{"messages":[{"role":"user","content":"hello"}],"stream":false}' >/dev/null 2>&1; then
+            echo "✅ Chat endpoint ready"
             
-            # Test chat endpoint dengan request sederhana
-            if curl -fsS -X POST "${OLLAMA_HOST}/api/chat" \
+            # Test show endpoint
+            if curl -fsS -X POST "${OLLAMA_HOST}/api/show" \
                -H "Content-Type: application/json" \
-               -d '{"messages":[{"role":"user","content":"hello"}],"stream":false}' >/dev/null 2>&1; then
-                echo "✅ Chat endpoint ready"
+               -d '{"name":"meta-llama/Llama-3.2-3B-Instruct"}' >/dev/null 2>&1; then
+                echo "✅ Show endpoint ready"
                 break
             else
-                echo "⚠️  Chat endpoint not ready yet"
+                echo "⚠️  Show endpoint not ready yet"
             fi
         else
-            echo "⚠️  API tags not ready yet"
+            echo "⚠️  Chat endpoint not ready yet"
         fi
     else
-        echo "⚠️  Health check not ready yet"
+        echo "⚠️  Basic endpoints not ready yet"
     fi
     
     RETRY_COUNT=$((RETRY_COUNT + 1))
@@ -157,10 +176,10 @@ done
 if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
     echo "❌ Hyperbolic proxy not fully ready after $MAX_RETRIES attempts"
     echo "Testing individual endpoints:"
-    curl -v "${OLLAMA_HOST}/health" || true
-    echo "---"
-    curl -v "${OLLAMA_HOST}/api/tags" || true
-    echo "---"
+    echo "Health:"; curl -s "${OLLAMA_HOST}/health" || true
+    echo "Tags:"; curl -s "${OLLAMA_HOST}/api/tags" || true
+    echo "Version:"; curl -s "${OLLAMA_HOST}/api/version" || true
+    echo "Show:"; curl -s -X POST "${OLLAMA_HOST}/api/show" -H "Content-Type: application/json" -d '{"name":"test"}' || true
     exit 1
 fi
 
@@ -168,10 +187,9 @@ echo "✅ Hyperbolic proxy fully ready!"
 
 # =========[ Final test sebelum start ]=========
 echo "Running final connectivity test..."
-curl -fsS "${OLLAMA_HOST}/health" | head -c 100
-echo "..."
-curl -fsS "${OLLAMA_HOST}/api/tags" | head -c 100
-echo "..."
+echo "Health:"; curl -s "${OLLAMA_HOST}/health" | head -c 100; echo "..."
+echo "Tags:"; curl -s "${OLLAMA_HOST}/api/tags" | head -c 100; echo "..."
+echo "Version:"; curl -s "${OLLAMA_HOST}/api/version" | head -c 100; echo "..."
 
 # =========[ Start node ]=========
 echo "Starting Kuzco worker with Hyperbolic inference..."
