@@ -3,15 +3,15 @@ services:
   kuzco-main:
     build: .
     container_name: kuzco-main
-    network_mode: host
+    network_mode: "host"
     privileged: true
     restart: always
     security_opt:
       - apparmor:unconfined
     environment:
       NODE_ENV: "production"
-      CODE: "YOUR_WORKER_CODE"
-      WORKER_NAME: "YOUR_WORKER_NAME"
+      CODE: "$NEW_CODE"
+      WORKER_NAME: "$NEW_NAME"
       OLLAMA_HOST: "http://localhost:14444"
       OLLAMA_ORIGINS: "*"
       INFERENCE_ENGINE: "hyperbolic"
