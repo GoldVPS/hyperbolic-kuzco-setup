@@ -99,6 +99,17 @@ def _http_post_json(url, payload, timeout=60):
     r = SESSION.post(url, data=json.dumps(payload), timeout=timeout)
     return r
 
+def _http_post_json_stream(url, payload, timeout=60):
+    headers = {
+        "Authorization": f"Bearer {HYPERBOLIC_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    response = requests.post(url, json=payload, headers=headers, timeout=timeout, stream=True)
+    response.raise_for_status()
+    for line in response.iter_lines(decode_unicode=False):
+        if line:
+            yield line + b'\n'
+
 # ===================== Routes =====================
 
 @app.route("/health", methods=["GET"])
@@ -155,25 +166,29 @@ def api_generate():
             model=requested_model
         )
 
-        r = _http_post_json(f"{HYPERBOLIC_API_URL}/chat/completions", payload)
-        if r.status_code != 200:
-            return jsonify({"error": f"Hyperbolic API error: {r.status_code}", "body": r.text}), 502
+        if stream:
+            response = _http_post_json_stream(f"{HYPERBOLIC_API_URL}/chat/completions", payload)
+            return Response(response, content_type='text/plain; charset=utf-8')
+        else:
+            r = _http_post_json(f"{HYPERBOLIC_API_URL}/chat/completions", payload)
+            if r.status_code != 200:
+                return jsonify({"error": f"Hyperbolic API error: {r.status_code}", "body": r.text}), 502
 
-        out = _from_hyperbolic_to_ollama(r.json(), original_model=requested_model)
-        
-        return jsonify({
-            "model": out["model"],
-            "created_at": out["created_at"],
-            "response": out["message"]["content"],
-            "done": True,
-            "context": [],
-            "total_duration": out["total_duration"],
-            "load_duration": out["load_duration"],
-            "prompt_eval_count": out["prompt_eval_count"],
-            "prompt_eval_duration": out["prompt_eval_duration"],
-            "eval_count": out["eval_count"],
-            "eval_duration": out["eval_duration"]
-        })
+            out = _from_hyperbolic_to_ollama(r.json(), original_model=requested_model)
+            
+            return jsonify({
+                "model": out["model"],
+                "created_at": out["created_at"],
+                "response": out["message"]["content"],
+                "done": True,
+                "context": [],
+                "total_duration": out["total_duration"],
+                "load_duration": out["load_duration"],
+                "prompt_eval_count": out["prompt_eval_count"],
+                "prompt_eval_duration": out["prompt_eval_duration"],
+                "eval_count": out["eval_count"],
+                "eval_duration": out["eval_duration"]
+            })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -182,6 +197,7 @@ def api_chat():
     try:
         body = request.get_json(force=True) or {}
         requested_model = body.get("model", "llama3.2:3b-instruct-fp16")
+        stream = body.get("stream", False)
 
         messages = body.get("messages")
         if not messages and "prompt" in body:
@@ -190,7 +206,7 @@ def api_chat():
         if not messages:
             return jsonify({"error": "messages or prompt is required"}), 400
 
-        max_tokens, temperature, top_p, stream = _ollama_options(body)
+        max_tokens, temperature, top_p, _ = _ollama_options(body)
 
         payload = _to_hyperbolic_payload(
             messages, 
@@ -201,12 +217,16 @@ def api_chat():
             model=requested_model
         )
 
-        r = _http_post_json(f"{HYPERBOLIC_API_URL}/chat/completions", payload)
-        if r.status_code != 200:
-            return jsonify({"error": f"Hyperbolic API error: {r.status_code}", "body": r.text}), 502
+        if stream:
+            response = _http_post_json_stream(f"{HYPERBOLIC_API_URL}/chat/completions", payload)
+            return Response(response, content_type='text/plain; charset=utf-8')
+        else:
+            r = _http_post_json(f"{HYPERBOLIC_API_URL}/chat/completions", payload)
+            if r.status_code != 200:
+                return jsonify({"error": f"Hyperbolic API error: {r.status_code}", "body": r.text}), 502
 
-        out = _from_hyperbolic_to_ollama(r.json(), original_model=requested_model)
-        return jsonify(out)
+            out = _from_hyperbolic_to_ollama(r.json(), original_model=requested_model)
+            return jsonify(out)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
